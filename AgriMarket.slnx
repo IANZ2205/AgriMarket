@@ -1,0 +1,10 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/AgriMarket.Client/AgriMarket.Client.vbproj" />
+    <Project Path="src/AgriMarket.Server/AgriMarket.Server.vbproj" />
+    <Project Path="src/AgriMarket.Shared/AgriMarket.Shared.vbproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/AgriMarket.TestConsole/AgriMarket.TestConsole.vbproj" />
+  </Folder>
+</Solution>
