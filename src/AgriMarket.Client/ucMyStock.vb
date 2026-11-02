@@ -1,6 +1,6 @@
-﻿Imports AgriMarket.Shared
+﻿Imports System.Text
+Imports AgriMarket.Shared
 Imports AgriMarket.[Shared].AgriMarket.[Shared]
-Imports System.Text
 
 Public Class ucMyStock
     <System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)>
@@ -18,8 +18,9 @@ Public Class ucMyStock
 
         BuildHeader()
         BuildTable()
-        LoadStock() ' <-- Call it when the screen opens
+        LoadStock()
     End Sub
+
     Private Sub BuildHeader()
         Dim lblTitle As New Label()
         lblTitle.Text = "My Stock"
@@ -47,9 +48,7 @@ Public Class ucMyStock
         btnAddItem.Size = New Size(130, 40)
         btnAddItem.Font = New Font("Segoe UI", 10, FontStyle.Bold)
         btnAddItem.Cursor = Cursors.Hand
-
         AddHandler btnAddItem.Click, Sub(s, ev) OpenAddItem()
-
         Me.Controls.Add(btnAddItem)
     End Sub
 
@@ -57,7 +56,7 @@ Public Class ucMyStock
         lvStock.View = View.Details
         lvStock.FullRowSelect = True
         lvStock.GridLines = False
-        lvStock.Font = modTheme.fBody
+        lvStock.Font = New Font("Segoe UI", 10, FontStyle.Regular)
         lvStock.Location = New Point(0, 90)
         lvStock.Size = New Size(Me.Width, Me.Height - 100)
         lvStock.Anchor = AnchorStyles.Top Or AnchorStyles.Bottom Or AnchorStyles.Left Or AnchorStyles.Right
@@ -79,56 +78,57 @@ Public Class ucMyStock
         frm.TraderID = TraderID
         frm.Token = Token
         If frm.ShowDialog() = DialogResult.OK Then
-            LoadStock() ' <-- Refresh the list if they saved a new item
+            LoadStock()
         End If
     End Sub
+
     Private Async Sub LoadStock()
         If String.IsNullOrEmpty(Token) Then Return
 
         Try
-            ' Format: STOCK_LIST|ReqID|Token|TraderID
             Dim msg As String = $"STOCK_LIST|4|{Token}|{TraderID}" & vbCrLf
             Dim data As Byte() = Encoding.UTF8.GetBytes(msg)
             Await frmConnect.Stream.WriteAsync(data, 0, data.Length)
 
-            Dim buffer(8192) As Byte ' Make buffer larger for lists
+            Dim buffer(16384) As Byte
             Dim bytesRead As Integer = Await frmConnect.Stream.ReadAsync(buffer, 0, buffer.Length)
             Dim reply As String = Encoding.UTF8.GetString(buffer, 0, bytesRead).Trim()
+
+            ' TEMPORARY DEBUG - Remove after testing
+            MessageBox.Show("Server replied: " & reply, "DEBUG")
 
             Dim parts() As String = reply.Split("|"c)
 
             If parts(0) = "OK" Then
                 lvStock.Items.Clear()
 
-                ' If there are records, split by Chr(30)
-                If parts.Length > 2 Then
-                    Dim records() As String = parts(2).Split(Chr(30))
+                If parts.Length >= 3 AndAlso Not String.IsNullOrEmpty(parts(2)) Then
+                    Dim rows() As String = parts(2).Split("~"c)
 
-                    For Each record In records
-                        If String.IsNullOrEmpty(record) Then Continue For
+                    For Each row In rows
+                        If String.IsNullOrEmpty(row) Then Continue For
+                        Dim f() As String = row.Split("|"c)
+                        If f.Length >= 6 Then
+                            Dim lvi As New ListViewItem(f(1))
+                            lvi.SubItems.Add("Produce")
+                            lvi.SubItems.Add(f(2))
+                            lvi.SubItems.Add(f(3))
+                            lvi.SubItems.Add(f(4))
 
-                        Dim fields() As String = record.Split(Chr(31))
-                        ' fields: 0=ItemID, 1=Name, 2=AvailableQty, 3=Unit, 4=Price, 5=BatchCount
-
-                        Dim lvi As New ListViewItem(fields(1)) ' Name
-                        lvi.SubItems.Add("Produce") ' Category (Placeholder for now)
-                        lvi.SubItems.Add(fields(2)) ' Qty
-                        lvi.SubItems.Add(fields(3)) ' Unit
-                        lvi.SubItems.Add(fields(4)) ' Price
-
-                        ' Simple Status logic for now
-                        Dim qty As Double = Double.Parse(fields(2))
-                        If qty > 0 Then
-                            lvi.SubItems.Add("Active")
-                            lvi.ForeColor = modTheme.cSuccess
-                        Else
-                            lvi.SubItems.Add("Out of Stock")
-                            lvi.ForeColor = modTheme.cDanger
+                            Dim qty As Double = Double.Parse(f(2))
+                            If qty > 0 Then
+                                lvi.SubItems.Add("Active")
+                                lvi.ForeColor = modTheme.cSuccess
+                            Else
+                                lvi.SubItems.Add("Out of Stock")
+                                lvi.ForeColor = modTheme.cDanger
+                            End If
+                            lvStock.Items.Add(lvi)
                         End If
-
-                        lvStock.Items.Add(lvi)
                     Next
                 End If
+            Else
+                MessageBox.Show("Error loading stock: " & parts(3))
             End If
         Catch ex As Exception
             MessageBox.Show("Error loading stock: " & ex.Message)

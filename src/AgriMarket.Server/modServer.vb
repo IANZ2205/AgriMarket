@@ -29,10 +29,8 @@ Public Module modServer
         While IsListening
             Try
                 Dim client As TcpClient = Await Listener.AcceptTcpClientAsync()
-                ' Handle each client in the background so it doesn't block others
                 Dim t = Task.Run(Sub() HandleClient(client))
             Catch
-                ' Ignore shutdown errors
             End Try
         End While
     End Sub
@@ -80,7 +78,6 @@ Public Module modServer
                             Dim name As String = userInfo.Rows(0)("DisplayName").ToString()
                             Dim token As String = Guid.NewGuid().ToString()
 
-                            ' OK|ReqID|Role|DisplayName|Token|UserID
                             reply = $"OK|{reqId}|{role}|{name}|{token}|{userId}" & vbCrLf
                         Else
                             reply = $"ERR|{reqId}|BAD_CREDENTIALS|Invalid email or password" & vbCrLf
@@ -88,12 +85,35 @@ Public Module modServer
                         Dim replyBytes As Byte() = Encoding.UTF8.GetBytes(reply)
                         stream.Write(replyBytes, 0, replyBytes.Length)
 
-                        '                     ' --- ITEM_ADD ---
+                        ' --- REGISTER ---
+                    ElseIf parts(0) = "REGISTER" Then
+                        Dim reqId As String = parts(1)
+                        Dim role As String = parts(3)
+                        Dim displayName As String = parts(4)
+                        Dim email As String = parts(5)
+                        Dim phone As String = parts(6)
+                        Dim district As String = parts(7)
+                        Dim password As String = parts(8)
+                        Dim firstName As String = parts(9)
+                        Dim lastName As String = parts(10)
+
+                        Dim newUserId As Integer = modDB.RegisterUser(role, displayName, firstName, lastName, email, phone, district, password)
+                        Dim reply As String
+
+                        If newUserId > 0 Then
+                            reply = $"OK|{reqId}|{newUserId}" & vbCrLf
+                        ElseIf newUserId = -1 Then
+                            reply = $"ERR|{reqId}|DUPLICATE_EMAIL|Email already registered" & vbCrLf
+                        Else
+                            reply = $"ERR|{reqId}|VALIDATION|Registration failed" & vbCrLf
+                        End If
+                        Dim regReply As Byte() = Encoding.UTF8.GetBytes(reply)
+                        stream.Write(regReply, 0, regReply.Length)
+
+                        ' --- ITEM_ADD ---
                     ElseIf parts(0) = "ITEM_ADD" Then
                         Dim reqId As String = parts(1)
-                        ' Token = parts(2)
                         Dim traderId As Integer = Integer.Parse(parts(3))
-                        MessageBox.Show("DEBUG: Server received STOCK_LIST for TraderID = " & traderId.ToString())
                         Dim category As String = parts(4)
                         Dim itemCode As String = parts(5)
                         Dim name As String = parts(6)
@@ -113,7 +133,6 @@ Public Module modServer
                         Else
                             reply = $"ERR|{reqId}|VALIDATION|Failed to save item" & vbCrLf
                         End If
-
                         Dim addReplyBytes As Byte() = Encoding.UTF8.GetBytes(reply)
                         stream.Write(addReplyBytes, 0, addReplyBytes.Length)
 
@@ -121,33 +140,30 @@ Public Module modServer
                     ElseIf parts(0) = "STOCK_LIST" Then
                         Dim reqId As String = parts(1)
                         Dim traderId As Integer = Integer.Parse(parts(3))
-                        System.Diagnostics.Debug.WriteLine("DEBUG - TraderID received: " & traderId.ToString())
 
                         Dim dt As DataTable = modDB.GetTraderStock(traderId)
 
-                        ' Format for multiple records: 
-                        ' Field delimiter = Chr(31), Record delimiter = Chr(30)
-                        Dim sbReply As New StringBuilder()
-                        sbReply.Append($"OK|{reqId}|")
-
+                        Dim rowsList As New List(Of String)
                         For Each row As DataRow In dt.Rows
-                            sbReply.Append(Chr(30)) ' Start a new record
-                            sbReply.Append(row("ItemID").ToString() & Chr(31))
-                            sbReply.Append(row("EnglishName").ToString() & Chr(31))
-                            sbReply.Append(row("AvailableQty").ToString() & Chr(31))
-                            sbReply.Append(row("Unit").ToString() & Chr(31))
-                            sbReply.Append(row("UnitPrice").ToString() & Chr(31))
-                            sbReply.Append(row("BatchCount").ToString())
+                            Dim rowStr As String = String.Join("|",
+                                row("ItemID").ToString(),
+                                row("EnglishName").ToString(),
+                                Convert.ToDouble(row("AvailableQty")).ToString("F2"),
+                                row("Unit").ToString(),
+                                Convert.ToDecimal(row("UnitPrice")).ToString("F0"),
+                                row("BatchCount").ToString()
+                            )
+                            rowsList.Add(rowStr)
                         Next
 
-                        Dim reply As String = sbReply.ToString() & vbCrLf
+                        Dim reply As String = "OK|" & reqId & "|" & String.Join("~", rowsList) & vbCrLf
                         Dim replyBytes As Byte() = Encoding.UTF8.GetBytes(reply)
                         stream.Write(replyBytes, 0, replyBytes.Length)
                     End If
                 End While
             End While
         Catch ex As Exception
-            ' Handle disconnects
+            System.Diagnostics.Debug.WriteLine("HandleClient error: " & ex.Message)
         Finally
             client.Close()
         End Try

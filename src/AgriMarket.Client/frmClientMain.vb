@@ -1,4 +1,5 @@
-﻿Imports AgriMarket.Shared
+﻿Imports System.Text
+Imports AgriMarket.Shared
 Imports AgriMarket.[Shared].AgriMarket.[Shared]
 
 Public Class frmClientMain

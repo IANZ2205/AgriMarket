@@ -85,6 +85,7 @@ Public Class frmLogin
         ' Sign up Link (Placeholder)
         Dim lnkSignUp As New LinkLabel()
         lnkSignUp.Text = "No account yet? Sign up"
+        AddHandler lnkSignUp.Click, AddressOf lnkSignUp_Click
         lnkSignUp.ForeColor = modTheme.cTeal
         lnkSignUp.LinkColor = modTheme.cTeal
         lnkSignUp.Location = New Point(405, 350)
@@ -128,5 +129,9 @@ Public Class frmLogin
         Catch ex As Exception
             MessageBox.Show("Error communicating with server: " & ex.Message)
         End Try
+    End Sub
+    Private Sub lnkSignUp_Click(sender As Object, e As EventArgs)
+        Dim frm As New frmSignUp()
+        frm.ShowDialog()
     End Sub
 End Class

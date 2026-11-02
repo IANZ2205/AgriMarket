@@ -163,7 +163,7 @@ Public Module modDB
                                 dt.Columns.Add("UserID", GetType(Integer))
                                 dt.Columns.Add("Role", GetType(String))
                                 dt.Columns.Add("DisplayName", GetType(String))
-                                dt.Rows.Add(reader("UserID"), reader("Role").ToString(), reader("DisplayName").ToString())
+                                dt.Rows.Add(Convert.ToInt32(reader("UserID")), reader("Role").ToString(), reader("DisplayName").ToString())
                             End If
                         End If
                     End Using
@@ -214,7 +214,7 @@ Public Module modDB
                         Dim datePart As String = DateTime.Now.ToString("yyyyMMdd")
                         Dim batchPrefix As String = $"{code}-{datePart}-"
 
-                        Dim countSql As String = "SELECT COUNT(*) FROM Batches WHERE BatchNo LIKE @prefix & '%'"
+                        Dim countSql As String = "SELECT COUNT(*) FROM Batches WHERE BatchNo LIKE @prefix || '%'"
                         Dim batchCount As Integer
                         Using cmd As New SqliteCommand(countSql, conn, transaction)
                             cmd.Parameters.AddWithValue("@prefix", batchPrefix)
@@ -254,13 +254,13 @@ Public Module modDB
             Using conn As New SqliteConnection(ConnString)
                 conn.Open()
                 Dim sql As String = "
-                    SELECT i.ItemID, i.EnglishName, i.Unit, i.UnitPrice, 
-                           IFNULL(SUM(CASE WHEN b.ExpiryDate > datetime('now') THEN (b.QtyRemaining - b.QtyReserved) ELSE 0 END), 0) as AvailableQty,
-                           COUNT(CASE WHEN b.ExpiryDate > datetime('now') THEN b.BatchID END) as BatchCount
-                    FROM Items i
-                    LEFT JOIN Batches b ON i.ItemID = b.ItemID AND b.Status = 'Active'
-                    WHERE i.TraderID = @tid AND i.Status = 'Active'
-                    GROUP BY i.ItemID, i.EnglishName, i.Unit, i.UnitPrice"
+                SELECT i.ItemID, i.EnglishName, i.Unit, i.UnitPrice, 
+                       IFNULL(SUM(CASE WHEN b.ExpiryDate > datetime('now') THEN (b.QtyRemaining - b.QtyReserved) ELSE 0 END), 0) as AvailableQty,
+                       COUNT(CASE WHEN b.ExpiryDate > datetime('now') THEN b.BatchID END) as BatchCount
+                FROM Items i
+                LEFT JOIN Batches b ON i.ItemID = b.ItemID AND b.Status = 'Active'
+                WHERE i.TraderID = @tid AND i.Status = 'Active'
+                GROUP BY i.ItemID, i.EnglishName, i.Unit, i.UnitPrice"
                 Using cmd As New SqliteCommand(sql, conn)
                     cmd.Parameters.AddWithValue("@tid", traderId)
                     Using reader As SqliteDataReader = cmd.ExecuteReader()
@@ -271,7 +271,38 @@ Public Module modDB
         Catch ex As Exception
             MessageBox.Show("Error fetching stock: " & ex.Message)
         End Try
-        MessageBox.Show("DEBUG: Database found " & dt.Rows.Count.ToString() & " items for TraderID = " & traderId.ToString())
         Return dt
+    End Function
+
+    Public Function RegisterUser(role As String, displayName As String, firstName As String, lastName As String, email As String, phone As String, district As String, password As String) As Integer
+        Try
+            Using conn As New SqliteConnection(ConnString)
+                conn.Open()
+                Dim checkSql As String = "SELECT COUNT(*) FROM Users WHERE Email = @email"
+                Using cmd As New SqliteCommand(checkSql, conn)
+                    cmd.Parameters.AddWithValue("@email", email)
+                    If Convert.ToInt32(cmd.ExecuteScalar()) > 0 Then Return -1
+                End Using
+
+                Dim salt As String = modSecurity.GenerateSalt()
+                Dim hash As String = modSecurity.HashPassword(password, salt)
+
+                Dim sql As String = "INSERT INTO Users (Email, PasswordHash, Salt, Role, DisplayName, FirstName, LastName, Phone, Status) VALUES (@email, @hash, @salt, @role, @name, @fname, @lname, @phone, 'Active'); SELECT last_insert_rowid();"
+                Using cmd As New SqliteCommand(sql, conn)
+                    cmd.Parameters.AddWithValue("@email", email)
+                    cmd.Parameters.AddWithValue("@hash", hash)
+                    cmd.Parameters.AddWithValue("@salt", salt)
+                    cmd.Parameters.AddWithValue("@role", role)
+                    cmd.Parameters.AddWithValue("@name", displayName)
+                    cmd.Parameters.AddWithValue("@fname", firstName)
+                    cmd.Parameters.AddWithValue("@lname", lastName)
+                    cmd.Parameters.AddWithValue("@phone", phone)
+                    Return Convert.ToInt32(cmd.ExecuteScalar())
+                End Using
+            End Using
+        Catch ex As Exception
+            MessageBox.Show("Register Error: " & ex.Message)
+            Return -2
+        End Try
     End Function
 End Module
