@@ -4,17 +4,15 @@ Imports System.IO
 Public Module modDB
     Public ReadOnly DbPath As String = Path.Combine(Application.StartupPath, "agrimarket.db")
     Public ReadOnly ConnString As String = $"Data Source={DbPath};Default Timeout=30;Pooling=False;Foreign Keys=False;"
+
     Public Function InitializeDatabase() As Boolean
         Try
             Using conn As New SqliteConnection(ConnString)
                 conn.Open()
-
-                ' Enable WAL mode for better concurrency
                 Using cmd As New SqliteCommand("PRAGMA journal_mode=WAL;", conn)
                     cmd.ExecuteNonQuery()
                 End Using
 
-                ' Users
                 Dim sqlUsers As String = "
                     CREATE TABLE IF NOT EXISTS Users (
                         UserID INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -43,7 +41,6 @@ Public Module modDB
                     cmd.ExecuteNonQuery()
                 End Using
 
-                ' Items
                 Dim sqlItems As String = "
                     CREATE TABLE IF NOT EXISTS Items (
                         ItemID INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -63,7 +60,6 @@ Public Module modDB
                     cmd.ExecuteNonQuery()
                 End Using
 
-                ' Batches
                 Dim sqlBatches As String = "
                     CREATE TABLE IF NOT EXISTS Batches (
                         BatchID INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -82,7 +78,6 @@ Public Module modDB
                     cmd.ExecuteNonQuery()
                 End Using
 
-                ' ItemLocalNames
                 Dim sqlLocalNames As String = "
                     CREATE TABLE IF NOT EXISTS ItemLocalNames (
                         ItemID INTEGER NOT NULL,
@@ -92,6 +87,74 @@ Public Module modDB
                         FOREIGN KEY(ItemID) REFERENCES Items(ItemID)
                     );"
                 Using cmd As New SqliteCommand(sqlLocalNames, conn)
+                    cmd.ExecuteNonQuery()
+                End Using
+
+                ' ServerLog table (required by AdjustBatch)
+                Dim sqlLog As String = "
+                    CREATE TABLE IF NOT EXISTS ServerLog (
+                        LogID INTEGER PRIMARY KEY AUTOINCREMENT,
+                        LoggedAt TEXT DEFAULT CURRENT_TIMESTAMP,
+                        Level TEXT(8),
+                        UserID INTEGER,
+                        EventType TEXT(20),
+                        Details TEXT(250)
+                    );"
+                Using cmd As New SqliteCommand(sqlLog, conn)
+                    cmd.ExecuteNonQuery()
+                End Using
+
+                Dim sqlOrders As String = "
+                    CREATE TABLE IF NOT EXISTS Orders (
+                        OrderID INTEGER PRIMARY KEY AUTOINCREMENT,
+                        OrderNo TEXT(15) UNIQUE NOT NULL,
+                        ItemID INTEGER NOT NULL,
+                        TraderID INTEGER NOT NULL,
+                        BuyerID INTEGER NOT NULL,
+                        Qty REAL NOT NULL,
+                        UnitPriceAtOrder NUMERIC NOT NULL,
+                        TotalAmount NUMERIC NOT NULL,
+                        NeededBy TEXT,
+                        DeliveryMode TEXT(10),
+                        DeliveryNote TEXT(200),
+                        BuyerNote TEXT(200),
+                        Status TEXT(10) DEFAULT 'Pending',
+                        ReasonID INTEGER,
+                        ReasonComment TEXT(200),
+                        CreatedAt TEXT DEFAULT CURRENT_TIMESTAMP,
+                        ConfirmedAt TEXT,
+                        ClosedAt TEXT
+                    );"
+                Using cmd As New SqliteCommand(sqlOrders, conn)
+                    cmd.ExecuteNonQuery()
+                End Using
+
+                Dim sqlOrderEvents As String = "
+                    CREATE TABLE IF NOT EXISTS OrderEvents (
+                        EventID INTEGER PRIMARY KEY AUTOINCREMENT,
+                        OrderID INTEGER NOT NULL,
+                        Status TEXT(10),
+                        ByUserID INTEGER,
+                        EventAt TEXT DEFAULT CURRENT_TIMESTAMP,
+                        Comment TEXT(200)
+                    );"
+                Using cmd As New SqliteCommand(sqlOrderEvents, conn)
+                    cmd.ExecuteNonQuery()
+                End Using
+
+                Dim sqlNotif As String = "
+                    CREATE TABLE IF NOT EXISTS Notifications (
+                        NotifID INTEGER PRIMARY KEY AUTOINCREMENT,
+                        UserID INTEGER NOT NULL,
+                        NotifType TEXT(20),
+                        Title TEXT(80),
+                        Body TEXT(250),
+                        RelatedType TEXT(10),
+                        RelatedID INTEGER,
+                        IsRead INTEGER DEFAULT 0,
+                        CreatedAt TEXT DEFAULT CURRENT_TIMESTAMP
+                    );"
+                Using cmd As New SqliteCommand(sqlNotif, conn)
                     cmd.ExecuteNonQuery()
                 End Using
 
@@ -109,16 +172,11 @@ Public Module modDB
         Using cmd As New SqliteCommand(checkSql, conn)
             If Convert.ToInt32(cmd.ExecuteScalar()) > 0 Then Return
         End Using
-
-        Dim adminEmail As String = "admin@agrimarket.com"
-        Dim adminPass As String = "admin123"
+        Dim insertSql As String = "INSERT INTO Users (UserID, Email, PasswordHash, Salt, Role, DisplayName, Status) VALUES (1, @Email, @Hash, @Salt, 'Admin', 'System Admin', 'Active')"
         Dim salt As String = modSecurity.GenerateSalt()
-        Dim hash As String = modSecurity.HashPassword(adminPass, salt)
-
-        Dim insertSql As String = "INSERT INTO Users (Email, PasswordHash, Salt, Role, DisplayName, Status) " &
-                                  "VALUES (@Email, @Hash, @Salt, 'Admin', 'System Admin', 'Active')"
+        Dim hash As String = modSecurity.HashPassword("admin123", salt)
         Using cmd As New SqliteCommand(insertSql, conn)
-            cmd.Parameters.AddWithValue("@Email", adminEmail)
+            cmd.Parameters.AddWithValue("@Email", "admin@agrimarket.com")
             cmd.Parameters.AddWithValue("@Hash", hash)
             cmd.Parameters.AddWithValue("@Salt", salt)
             cmd.ExecuteNonQuery()
@@ -174,106 +232,6 @@ Public Module modDB
         Return dt
     End Function
 
-    Public Function AddItem(traderId As Integer, category As String, itemCode As String, name As String, description As String, unitPrice As Decimal, unit As String, lowStock As Integer, qty As Double, shelfLifeDays As Integer, localNamesData As String) As String
-        Try
-            Using conn As New SqliteConnection(ConnString)
-                conn.Open()
-                Using transaction = conn.BeginTransaction()
-                    Try
-                        Dim sqlItem As String = "INSERT INTO Items (TraderID, Category, ItemCode, EnglishName, Description, UnitPrice, Unit, LowStockLevel) VALUES (@tid, @cat, @code, @name, @desc, @price, @unit, @low); SELECT last_insert_rowid();"
-                        Dim itemId As Integer
-                        Using cmd As New SqliteCommand(sqlItem, conn, transaction)
-                            cmd.Parameters.AddWithValue("@tid", traderId)
-                            cmd.Parameters.AddWithValue("@cat", category)
-                            cmd.Parameters.AddWithValue("@code", itemCode)
-                            cmd.Parameters.AddWithValue("@name", name)
-                            cmd.Parameters.AddWithValue("@desc", description)
-                            cmd.Parameters.AddWithValue("@price", unitPrice)
-                            cmd.Parameters.AddWithValue("@unit", unit)
-                            cmd.Parameters.AddWithValue("@low", lowStock)
-                            itemId = Convert.ToInt32(cmd.ExecuteScalar())
-                        End Using
-
-                        If Not String.IsNullOrEmpty(localNamesData) Then
-                            Dim names() As String = localNamesData.Split("|"c)
-                            For Each n In names
-                                Dim parts() As String = n.Split(":"c)
-                                If parts.Length = 2 Then
-                                    Dim sqlLocal As String = "INSERT INTO ItemLocalNames (ItemID, Language, LocalName) VALUES (@id, @lang, @name)"
-                                    Using cmd As New SqliteCommand(sqlLocal, conn, transaction)
-                                        cmd.Parameters.AddWithValue("@id", itemId)
-                                        cmd.Parameters.AddWithValue("@lang", parts(0))
-                                        cmd.Parameters.AddWithValue("@name", parts(1))
-                                        cmd.ExecuteNonQuery()
-                                    End Using
-                                End If
-                            Next
-                        End If
-
-                        Dim code As String = itemCode.ToUpper()
-                        Dim datePart As String = DateTime.Now.ToString("yyyyMMdd")
-                        Dim batchPrefix As String = $"{code}-{datePart}-"
-
-                        Dim countSql As String = "SELECT COUNT(*) FROM Batches WHERE BatchNo LIKE @prefix || '%'"
-                        Dim batchCount As Integer
-                        Using cmd As New SqliteCommand(countSql, conn, transaction)
-                            cmd.Parameters.AddWithValue("@prefix", batchPrefix)
-                            batchCount = Convert.ToInt32(cmd.ExecuteScalar())
-                        End Using
-
-                        Dim batchNo As String = $"{batchPrefix}{(batchCount + 1).ToString("D2")}"
-                        Dim expiryDate As String = DateTime.Now.AddDays(shelfLifeDays).ToString("yyyy-MM-dd HH:mm:ss")
-
-                        Dim sqlBatch As String = "INSERT INTO Batches (ItemID, BatchNo, QtyAdded, QtyRemaining, ShelfLifeDays, ExpiryDate) VALUES (@id, @bno, @qty, @qty, @days, @exp)"
-                        Using cmd As New SqliteCommand(sqlBatch, conn, transaction)
-                            cmd.Parameters.AddWithValue("@id", itemId)
-                            cmd.Parameters.AddWithValue("@bno", batchNo)
-                            cmd.Parameters.AddWithValue("@qty", qty)
-                            cmd.Parameters.AddWithValue("@days", shelfLifeDays)
-                            cmd.Parameters.AddWithValue("@exp", expiryDate)
-                            cmd.ExecuteNonQuery()
-                        End Using
-
-                        transaction.Commit()
-                        Return batchNo
-                    Catch ex As Exception
-                        transaction.Rollback()
-                        Throw
-                    End Try
-                End Using
-            End Using
-        Catch ex As Exception
-            MessageBox.Show("Error saving item: " & ex.Message)
-            Return ""
-        End Try
-    End Function
-
-    Public Function GetTraderStock(traderId As Integer) As DataTable
-        Dim dt As New DataTable()
-        Try
-            Using conn As New SqliteConnection(ConnString)
-                conn.Open()
-                Dim sql As String = "
-                SELECT i.ItemID, i.EnglishName, i.Unit, i.UnitPrice, 
-                       IFNULL(SUM(CASE WHEN b.ExpiryDate > datetime('now') THEN (b.QtyRemaining - b.QtyReserved) ELSE 0 END), 0) as AvailableQty,
-                       COUNT(CASE WHEN b.ExpiryDate > datetime('now') THEN b.BatchID END) as BatchCount
-                FROM Items i
-                LEFT JOIN Batches b ON i.ItemID = b.ItemID AND b.Status = 'Active'
-                WHERE i.TraderID = @tid AND i.Status = 'Active'
-                GROUP BY i.ItemID, i.EnglishName, i.Unit, i.UnitPrice"
-                Using cmd As New SqliteCommand(sql, conn)
-                    cmd.Parameters.AddWithValue("@tid", traderId)
-                    Using reader As SqliteDataReader = cmd.ExecuteReader()
-                        dt.Load(reader)
-                    End Using
-                End Using
-            End Using
-        Catch ex As Exception
-            MessageBox.Show("Error fetching stock: " & ex.Message)
-        End Try
-        Return dt
-    End Function
-
     Public Function RegisterUser(role As String, displayName As String, firstName As String, lastName As String, email As String, phone As String, district As String, password As String) As Integer
         Try
             Using conn As New SqliteConnection(ConnString)
@@ -283,10 +241,8 @@ Public Module modDB
                     cmd.Parameters.AddWithValue("@email", email)
                     If Convert.ToInt32(cmd.ExecuteScalar()) > 0 Then Return -1
                 End Using
-
                 Dim salt As String = modSecurity.GenerateSalt()
                 Dim hash As String = modSecurity.HashPassword(password, salt)
-
                 Dim sql As String = "INSERT INTO Users (Email, PasswordHash, Salt, Role, DisplayName, FirstName, LastName, Phone, Status) VALUES (@email, @hash, @salt, @role, @name, @fname, @lname, @phone, 'Active'); SELECT last_insert_rowid();"
                 Using cmd As New SqliteCommand(sql, conn)
                     cmd.Parameters.AddWithValue("@email", email)
@@ -305,4 +261,447 @@ Public Module modDB
             Return -2
         End Try
     End Function
+
+    Public Function AddItem(traderId As Integer, category As String, itemCode As String, name As String, description As String, unitPrice As Decimal, unit As String, lowStock As Integer, qty As Double, shelfLifeDays As Integer, localNamesData As String) As String
+        Dim attempts As Integer = 0
+        While attempts < 10
+            Try
+                Using conn As New SqliteConnection(ConnString)
+                    conn.Open()
+                    Using transaction = conn.BeginTransaction()
+                        Try
+                            Dim sqlItem As String = "INSERT INTO Items (TraderID, Category, ItemCode, EnglishName, Description, UnitPrice, Unit, LowStockLevel) VALUES (@tid, @cat, @code, @name, @desc, @price, @unit, @low); SELECT last_insert_rowid();"
+                            Dim itemId As Integer
+                            Using cmd As New SqliteCommand(sqlItem, conn, transaction)
+                                cmd.Parameters.AddWithValue("@tid", traderId)
+                                cmd.Parameters.AddWithValue("@cat", category)
+                                cmd.Parameters.AddWithValue("@code", itemCode)
+                                cmd.Parameters.AddWithValue("@name", name)
+                                cmd.Parameters.AddWithValue("@desc", description)
+                                cmd.Parameters.AddWithValue("@price", unitPrice)
+                                cmd.Parameters.AddWithValue("@unit", unit)
+                                cmd.Parameters.AddWithValue("@low", lowStock)
+                                itemId = Convert.ToInt32(cmd.ExecuteScalar())
+                            End Using
+
+                            If Not String.IsNullOrEmpty(localNamesData) Then
+                                Dim names() As String = localNamesData.Split("|"c)
+                                For Each n In names
+                                    Dim parts() As String = n.Split(":"c)
+                                    If parts.Length = 2 Then
+                                        Dim sqlLocal As String = "INSERT INTO ItemLocalNames (ItemID, Language, LocalName) VALUES (@id, @lang, @name)"
+                                        Using cmd As New SqliteCommand(sqlLocal, conn, transaction)
+                                            cmd.Parameters.AddWithValue("@id", itemId)
+                                            cmd.Parameters.AddWithValue("@lang", parts(0))
+                                            cmd.Parameters.AddWithValue("@name", parts(1))
+                                            cmd.ExecuteNonQuery()
+                                        End Using
+                                    End If
+                                Next
+                            End If
+
+                            Dim code As String = itemCode.ToUpper()
+                            Dim datePart As String = DateTime.Now.ToString("yyyyMMdd")
+                            Dim batchPrefix As String = $"{code}-{datePart}-"
+                            Dim countSql As String = "SELECT COUNT(*) FROM Batches WHERE BatchNo LIKE @prefix || '%'"
+                            Dim batchCount As Integer
+                            Using cmd As New SqliteCommand(countSql, conn, transaction)
+                                cmd.Parameters.AddWithValue("@prefix", batchPrefix)
+                                batchCount = Convert.ToInt32(cmd.ExecuteScalar())
+                            End Using
+                            Dim batchNo As String = $"{batchPrefix}{(batchCount + 1).ToString("D2")}"
+                            Dim expiryDate As String = DateTime.Now.AddDays(shelfLifeDays).ToString("yyyy-MM-dd HH:mm:ss")
+                            Dim sqlBatch As String = "INSERT INTO Batches (ItemID, BatchNo, QtyAdded, QtyRemaining, ShelfLifeDays, ExpiryDate) VALUES (@id, @bno, @qty, @qty, @days, @exp)"
+                            Using cmd As New SqliteCommand(sqlBatch, conn, transaction)
+                                cmd.Parameters.AddWithValue("@id", itemId)
+                                cmd.Parameters.AddWithValue("@bno", batchNo)
+                                cmd.Parameters.AddWithValue("@qty", qty)
+                                cmd.Parameters.AddWithValue("@days", shelfLifeDays)
+                                cmd.Parameters.AddWithValue("@exp", expiryDate)
+                                cmd.ExecuteNonQuery()
+                            End Using
+                            transaction.Commit()
+                            Return batchNo
+                        Catch ex As Exception
+                            transaction.Rollback()
+                            Throw
+                        End Try
+                    End Using
+                End Using
+            Catch ex As Exception
+                If ex.Message.Contains("locked") AndAlso attempts < 9 Then
+                    attempts += 1
+                    Threading.Thread.Sleep(200)
+                Else
+                    MessageBox.Show("Error saving item: " & ex.Message)
+                    Return ""
+                End If
+            End Try
+        End While
+        Return ""
+    End Function
+
+    Public Function GetTraderStock(traderId As Integer) As DataTable
+        Dim dt As New DataTable()
+        Try
+            Using conn As New SqliteConnection(ConnString)
+                conn.Open()
+                Dim sql As String = "
+                    SELECT 
+                        i.ItemID,
+                        i.EnglishName,
+                        i.Category,
+                        IFNULL(SUM(CASE WHEN b.ExpiryDate > datetime('now') THEN (b.QtyRemaining - b.QtyReserved) ELSE 0 END), 0) AS AvailableQty,
+                        i.Unit,
+                        i.UnitPrice,
+                        COUNT(CASE WHEN b.ExpiryDate > datetime('now') THEN b.BatchID END) AS BatchCount
+                    FROM Items i
+                    LEFT JOIN Batches b ON i.ItemID = b.ItemID AND b.Status = 'Active'
+                    WHERE i.TraderID = @tid AND i.Status = 'Active'
+                    GROUP BY i.ItemID, i.EnglishName, i.Category, i.Unit, i.UnitPrice
+                    ORDER BY i.EnglishName ASC"
+                Using cmd As New SqliteCommand(sql, conn)
+                    cmd.Parameters.AddWithValue("@tid", traderId)
+                    Using reader As SqliteDataReader = cmd.ExecuteReader()
+                        dt.Load(reader)
+                    End Using
+                End Using
+            End Using
+        Catch ex As Exception
+            MessageBox.Show("Error fetching stock: " & ex.Message)
+        End Try
+        Return dt
+    End Function
+
+    Public Function TopUpItem(itemId As Integer, qty As Double, shelfLifeDays As Integer, newPrice As Decimal) As String
+        Try
+            Using conn As New SqliteConnection(ConnString)
+                conn.Open()
+                Using transaction = conn.BeginTransaction()
+                    Try
+                        Dim code As String = ""
+                        Dim sqlGet As String = "SELECT ItemCode FROM Items WHERE ItemID = @id AND Status = 'Active'"
+                        Using cmd As New SqliteCommand(sqlGet, conn, transaction)
+                            cmd.Parameters.AddWithValue("@id", itemId)
+                            Dim result = cmd.ExecuteScalar()
+                            If result Is Nothing Then
+                                transaction.Rollback()
+                                Return ""
+                            End If
+                            code = result.ToString()
+                        End Using
+
+                        Dim datePart As String = DateTime.Now.ToString("yyyyMMdd")
+                        Dim batchPrefix As String = $"{code.ToUpper()}-{datePart}-"
+                        Dim countSql As String = "SELECT COUNT(*) FROM Batches WHERE BatchNo LIKE @prefix || '%'"
+                        Dim batchCount As Integer
+                        Using cmd As New SqliteCommand(countSql, conn, transaction)
+                            cmd.Parameters.AddWithValue("@prefix", batchPrefix)
+                            batchCount = Convert.ToInt32(cmd.ExecuteScalar())
+                        End Using
+                        Dim batchNo As String = $"{batchPrefix}{(batchCount + 1).ToString("D2")}"
+                        Dim expiryDate As String = DateTime.Now.AddDays(shelfLifeDays).ToString("yyyy-MM-dd HH:mm:ss")
+
+                        Dim sqlBatch As String = "INSERT INTO Batches (ItemID, BatchNo, QtyAdded, QtyRemaining, ShelfLifeDays, ExpiryDate) VALUES (@id, @bno, @qty, @qty, @days, @exp)"
+                        Using cmd As New SqliteCommand(sqlBatch, conn, transaction)
+                            cmd.Parameters.AddWithValue("@id", itemId)
+                            cmd.Parameters.AddWithValue("@bno", batchNo)
+                            cmd.Parameters.AddWithValue("@qty", qty)
+                            cmd.Parameters.AddWithValue("@days", shelfLifeDays)
+                            cmd.Parameters.AddWithValue("@exp", expiryDate)
+                            cmd.ExecuteNonQuery()
+                        End Using
+
+                        If newPrice > 0 Then
+                            Dim sqlPrice As String = "UPDATE Items SET UnitPrice = @price WHERE ItemID = @id"
+                            Using cmd As New SqliteCommand(sqlPrice, conn, transaction)
+                                cmd.Parameters.AddWithValue("@price", newPrice)
+                                cmd.Parameters.AddWithValue("@id", itemId)
+                                cmd.ExecuteNonQuery()
+                            End Using
+                        End If
+
+                        transaction.Commit()
+                        Return batchNo
+                    Catch ex As Exception
+                        transaction.Rollback()
+                        Throw
+                    End Try
+                End Using
+            End Using
+        Catch ex As Exception
+            MessageBox.Show("Error topping up: " & ex.Message)
+            Return ""
+        End Try
+    End Function
+
+    Public Function GetItemBatches(itemId As Integer) As DataTable
+        Dim dt As New DataTable()
+        Try
+            Using conn As New SqliteConnection(ConnString)
+                conn.Open()
+                Dim sql As String = "
+                    SELECT 
+                        BatchID,
+                        BatchNo,
+                        DateAdded,
+                        ExpiryDate,
+                        QtyRemaining,
+                        QtyReserved,
+                        Status,
+                        CAST(julianday(ExpiryDate) - julianday('now') AS INTEGER) AS DaysLeft
+                    FROM Batches 
+                    WHERE ItemID = @id AND Status = 'Active'
+                    ORDER BY ExpiryDate ASC"
+                Using cmd As New SqliteCommand(sql, conn)
+                    cmd.Parameters.AddWithValue("@id", itemId)
+                    Using reader As SqliteDataReader = cmd.ExecuteReader()
+                        dt.Load(reader)
+                    End Using
+                End Using
+            End Using
+        Catch ex As Exception
+            MessageBox.Show("Error fetching batches: " & ex.Message)
+        End Try
+        Return dt
+    End Function
+
+    Public Function UpdateItem(itemId As Integer, name As String, description As String, unitPrice As Decimal, lowStock As Integer) As Boolean
+        Try
+            Using conn As New SqliteConnection(ConnString)
+                conn.Open()
+                Dim sql As String = "UPDATE Items SET EnglishName = @name, Description = @desc, UnitPrice = @price, LowStockLevel = @low WHERE ItemID = @id"
+                Using cmd As New SqliteCommand(sql, conn)
+                    cmd.Parameters.AddWithValue("@name", name)
+                    cmd.Parameters.AddWithValue("@desc", description)
+                    cmd.Parameters.AddWithValue("@price", unitPrice)
+                    cmd.Parameters.AddWithValue("@low", lowStock)
+                    cmd.Parameters.AddWithValue("@id", itemId)
+                    Return cmd.ExecuteNonQuery() > 0
+                End Using
+            End Using
+        Catch ex As Exception
+            MessageBox.Show("Error updating item: " & ex.Message)
+            Return False
+        End Try
+    End Function
+
+    Public Function AdjustBatch(batchId As Integer, newQty As Double, newShelfLife As Integer, reason As String) As Boolean
+        Try
+            Using conn As New SqliteConnection(ConnString)
+                conn.Open()
+                Dim dateAdded As String = ""
+                Dim sqlGet As String = "SELECT DateAdded FROM Batches WHERE BatchID = @id"
+                Using cmd As New SqliteCommand(sqlGet, conn)
+                    cmd.Parameters.AddWithValue("@id", batchId)
+                    Dim result = cmd.ExecuteScalar()
+                    If result IsNot Nothing Then dateAdded = result.ToString()
+                End Using
+
+                Dim expiryDate As String = ""
+                If Not String.IsNullOrEmpty(dateAdded) Then
+                    Dim dtAdded As DateTime = DateTime.Parse(dateAdded)
+                    expiryDate = dtAdded.AddDays(newShelfLife).ToString("yyyy-MM-dd HH:mm:ss")
+                End If
+
+                Dim sql As String = "UPDATE Batches SET QtyRemaining = @qty, ShelfLifeDays = @days, ExpiryDate = @exp WHERE BatchID = @id"
+                Using cmd As New SqliteCommand(sql, conn)
+                    cmd.Parameters.AddWithValue("@qty", newQty)
+                    cmd.Parameters.AddWithValue("@days", newShelfLife)
+                    cmd.Parameters.AddWithValue("@exp", expiryDate)
+                    cmd.Parameters.AddWithValue("@id", batchId)
+                    cmd.ExecuteNonQuery()
+                End Using
+
+                Dim sqlLog As String = "INSERT INTO ServerLog (LoggedAt, Level, EventType, Details) VALUES (datetime('now'), 'Info', 'BatchAdjust', @details)"
+                Using cmd As New SqliteCommand(sqlLog, conn)
+                    cmd.Parameters.AddWithValue("@details", $"Batch {batchId} adjusted: Qty={newQty}, Shelf={newShelfLife}, Reason={reason}")
+                    cmd.ExecuteNonQuery()
+                End Using
+
+                Return True
+            End Using
+        Catch ex As Exception
+            MessageBox.Show("Error adjusting batch: " & ex.Message)
+            Return False
+        End Try
+    End Function
+
+
+    Public Function GetBrowseListings(category As String) As DataTable
+        Dim dt As New DataTable()
+        Try
+            Using conn As New SqliteConnection(ConnString)
+                conn.Open()
+                Dim sql As String = "
+                    SELECT 
+                        i.ItemID,
+                        i.EnglishName,
+                        i.Category,
+                        i.Unit,
+                        i.UnitPrice,
+                        u.DisplayName AS TraderName,
+                        u.UserID AS TraderID,
+                        IFNULL(SUM(CASE WHEN b.ExpiryDate > datetime('now') THEN (b.QtyRemaining - b.QtyReserved) ELSE 0 END), 0) AS AvailableQty,
+                        MIN(CASE WHEN b.ExpiryDate > datetime('now') THEN CAST(julianday(b.ExpiryDate) - julianday('now') AS INTEGER) END) AS DaysLeft
+                    FROM Items i
+                    JOIN Users u ON i.TraderID = u.UserID
+                    LEFT JOIN Batches b ON i.ItemID = b.ItemID AND b.Status = 'Active'
+                    WHERE i.Status = 'Active' AND u.Status = 'Active'
+                    GROUP BY i.ItemID, i.EnglishName, i.Category, i.Unit, i.UnitPrice, u.DisplayName, u.UserID
+                    HAVING AvailableQty > 0"
+                If Not String.IsNullOrEmpty(category) AndAlso category <> "All" Then
+                    sql &= " AND i.Category = @cat"
+                End If
+                sql &= " ORDER BY i.EnglishName ASC"
+
+                Using cmd As New SqliteCommand(sql, conn)
+                    If Not String.IsNullOrEmpty(category) AndAlso category <> "All" Then
+                        cmd.Parameters.AddWithValue("@cat", category)
+                    End If
+                    Using reader As SqliteDataReader = cmd.ExecuteReader()
+                        dt.Load(reader)
+                    End Using
+                End Using
+            End Using
+        Catch ex As Exception
+            MessageBox.Show("Error fetching listings: " & ex.Message)
+        End Try
+        Return dt
+    End Function
+
+    Public Function GetItemDetail(itemId As Integer) As DataTable
+        Dim dt As New DataTable()
+        Try
+            Using conn As New SqliteConnection(ConnString)
+                conn.Open()
+                Dim sql As String = "
+                    SELECT 
+                        i.ItemID,
+                        i.EnglishName,
+                        i.Category,
+                        i.Description,
+                        i.Unit,
+                        i.UnitPrice,
+                        u.DisplayName AS TraderName,
+                        u.Phone AS TraderPhone,
+                        u.UserID AS TraderID,
+                        u.LocationDetail AS TraderLocation,
+                        IFNULL(SUM(CASE WHEN b.ExpiryDate > datetime('now') THEN (b.QtyRemaining - b.QtyReserved) ELSE 0 END), 0) AS AvailableQty,
+                        MIN(CASE WHEN b.ExpiryDate > datetime('now') THEN CAST(julianday(b.ExpiryDate) - julianday('now') AS INTEGER) END) AS DaysLeft,
+                        (SELECT LocalName FROM ItemLocalNames WHERE ItemID = i.ItemID AND Language = 'Luganda') AS LocalName
+                    FROM Items i
+                    JOIN Users u ON i.TraderID = u.UserID
+                    LEFT JOIN Batches b ON i.ItemID = b.ItemID AND b.Status = 'Active'
+                    WHERE i.ItemID = @id
+                    GROUP BY i.ItemID, i.EnglishName, i.Category, i.Description, i.Unit, i.UnitPrice, 
+                             u.DisplayName, u.Phone, u.UserID, u.LocationDetail"
+                Using cmd As New SqliteCommand(sql, conn)
+                    cmd.Parameters.AddWithValue("@id", itemId)
+                    Using reader As SqliteDataReader = cmd.ExecuteReader()
+                        dt.Load(reader)
+                    End Using
+                End Using
+            End Using
+        Catch ex As Exception
+            MessageBox.Show("Error fetching item: " & ex.Message)
+        End Try
+        Return dt
+    End Function
+
+    Public Function PlaceOrder(buyerId As Integer, itemId As Integer, qty As Double, neededBy As String, delivery As String, note As String, unitPrice As Decimal, traderId As Integer) As String
+        Dim attempts As Integer = 0
+        While attempts < 10
+            Try
+                Using conn As New SqliteConnection(ConnString)
+                    conn.Open()
+                    Using transaction = conn.BeginTransaction()
+                        Try
+                            Dim orderNo As String = "ORD-" & DateTime.Now.ToString("yyyyMMdd") & "-" & (DateTime.Now.Ticks Mod 10000).ToString("D4")
+                            Dim total As Decimal = CDec(qty) * unitPrice
+                            Dim sql As String = "INSERT INTO Orders (OrderNo, ItemID, TraderID, BuyerID, Qty, UnitPriceAtOrder, TotalAmount, NeededBy, DeliveryMode, BuyerNote, Status, CreatedAt) VALUES (@no, @item, @trader, @buyer, @qty, @price, @total, @needed, @delivery, @note, 'Pending', datetime('now')); SELECT last_insert_rowid();"
+                            Dim orderId As Integer
+                            Using cmd As New SqliteCommand(sql, conn, transaction)
+                                cmd.Parameters.AddWithValue("@no", orderNo)
+                                cmd.Parameters.AddWithValue("@item", itemId)
+                                cmd.Parameters.AddWithValue("@trader", traderId)
+                                cmd.Parameters.AddWithValue("@buyer", buyerId)
+                                cmd.Parameters.AddWithValue("@qty", qty)
+                                cmd.Parameters.AddWithValue("@price", unitPrice)
+                                cmd.Parameters.AddWithValue("@total", total)
+                                cmd.Parameters.AddWithValue("@needed", neededBy)
+                                cmd.Parameters.AddWithValue("@delivery", delivery)
+                                cmd.Parameters.AddWithValue("@note", note)
+                                orderId = Convert.ToInt32(cmd.ExecuteScalar())
+                            End Using
+
+                            Dim sqlEvent As String = "INSERT INTO OrderEvents (OrderID, Status, ByUserID, EventAt, Comment) VALUES (@id, 'Pending', @by, datetime('now'), 'Order placed')"
+                            Using cmd As New SqliteCommand(sqlEvent, conn, transaction)
+                                cmd.Parameters.AddWithValue("@id", orderId)
+                                cmd.Parameters.AddWithValue("@by", buyerId)
+                                cmd.ExecuteNonQuery()
+                            End Using
+
+                            Dim notifSql As String = "INSERT INTO Notifications (UserID, NotifType, Title, Body, RelatedType, RelatedID, CreatedAt) VALUES (@uid, 'NEW_ORDER', 'New Order', 'You have a new order: " & orderNo & "', 'Order', @oid, datetime('now'))"
+                            Using cmd As New SqliteCommand(notifSql, conn, transaction)
+                                cmd.Parameters.AddWithValue("@uid", traderId)
+                                cmd.Parameters.AddWithValue("@oid", orderId)
+                                cmd.ExecuteNonQuery()
+                            End Using
+
+                            transaction.Commit()
+                            Return orderNo
+                        Catch ex As Exception
+                            transaction.Rollback()
+                            Throw
+                        End Try
+                    End Using
+                End Using
+            Catch ex As Exception
+                If ex.Message.Contains("locked") AndAlso attempts < 9 Then
+                    attempts += 1
+                    Threading.Thread.Sleep(200)
+                Else
+                    MessageBox.Show("Error placing order: " & ex.Message)
+                    Return ""
+                End If
+            End Try
+        End While
+        Return ""
+    End Function
+
+
+    Public Function GetTraderOrders(traderId As Integer) As DataTable
+        Dim dt As New DataTable()
+        Try
+            Using conn As New SqliteConnection(ConnString)
+                conn.Open()
+                Dim sql As String = "
+                    SELECT 
+                        o.OrderID,
+                        o.OrderNo,
+                        o.Status,
+                        o.Qty,
+                        o.TotalAmount,
+                        o.CreatedAt,
+                        i.EnglishName AS ItemName,
+                        u.DisplayName AS BuyerName
+                    FROM Orders o
+                    JOIN Items i ON o.ItemID = i.ItemID
+                    JOIN Users u ON o.BuyerID = u.UserID
+                    WHERE o.TraderID = @tid
+                    ORDER BY o.CreatedAt DESC"
+                Using cmd As New SqliteCommand(sql, conn)
+                    cmd.Parameters.AddWithValue("@tid", traderId)
+                    Using reader As SqliteDataReader = cmd.ExecuteReader()
+                        dt.Load(reader)
+                    End Using
+                End Using
+            End Using
+        Catch ex As Exception
+            MessageBox.Show("Error fetching orders: " & ex.Message)
+        End Try
+        Return dt
+    End Function
+
 End Module

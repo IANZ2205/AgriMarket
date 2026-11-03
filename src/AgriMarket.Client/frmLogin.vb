@@ -15,7 +15,18 @@ Public Class frmLogin
         Me.BackColor = modTheme.cWhite
         Me.Font = modTheme.fBody
 
-        ' Left Brand Panel
+        ' Safety: if we somehow landed here without a stream, go back to connect
+        If frmConnect.Stream Is Nothing Then
+            Dim cf As New frmConnect()
+            cf.Show()
+            Me.Hide()
+            Return
+        End If
+
+        BuildLayout()
+    End Sub
+
+    Private Sub BuildLayout()
         Dim pnlLeft As New Panel()
         pnlLeft.BackColor = modTheme.cOcean
         pnlLeft.Dock = DockStyle.Left
@@ -38,7 +49,6 @@ Public Class frmLogin
         lblTagline.AutoSize = True
         pnlLeft.Controls.Add(lblTagline)
 
-        ' Right Form Fields
         Dim lblWelcome As New Label()
         lblWelcome.Text = "Welcome back"
         lblWelcome.Font = modTheme.fTitle
@@ -77,19 +87,16 @@ Public Class frmLogin
         btnLogin.Location = New Point(405, 290)
         btnLogin.Size = New Size(300, 42)
         btnLogin.Font = New Font("Segoe UI", 10, FontStyle.Bold)
+        AddHandler btnLogin.Click, AddressOf btnLogin_Click
         Me.Controls.Add(btnLogin)
 
-        ' Bind the click event safely
-        AddHandler btnLogin.Click, AddressOf btnLogin_Click
-
-        ' Sign up Link (Placeholder)
         Dim lnkSignUp As New LinkLabel()
         lnkSignUp.Text = "No account yet? Sign up"
-        AddHandler lnkSignUp.Click, AddressOf lnkSignUp_Click
         lnkSignUp.ForeColor = modTheme.cTeal
         lnkSignUp.LinkColor = modTheme.cTeal
         lnkSignUp.Location = New Point(405, 350)
         lnkSignUp.AutoSize = True
+        AddHandler lnkSignUp.Click, AddressOf lnkSignUp_Click
         Me.Controls.Add(lnkSignUp)
     End Sub
 
@@ -103,33 +110,39 @@ Public Class frmLogin
         End If
 
         Try
-            ' Format: LOGIN|ReqID|Token|email|password
-            ' We use ReqID 2 because HELLO was 1.
             Dim loginMsg As String = $"LOGIN|2||{email}|{password}" & vbCrLf
             Dim data As Byte() = Encoding.UTF8.GetBytes(loginMsg)
             Await frmConnect.Stream.WriteAsync(data, 0, data.Length)
 
-            ' Wait for the reply
             Dim buffer(1024) As Byte
             Dim bytesRead As Integer = Await frmConnect.Stream.ReadAsync(buffer, 0, buffer.Length)
             Dim reply As String = Encoding.UTF8.GetString(buffer, 0, bytesRead).Trim()
-
             Dim parts() As String = reply.Split("|"c)
 
             If parts(0) = "OK" Then
                 Dim role As String = parts(2)
                 Dim userName As String = parts(3)
-                ' Open the main dashboard and hide the login
+                frmConnect.Token = parts(4)
+                Dim userId As Integer = Convert.ToInt32(parts(5))
+
                 Dim mainForm As New frmClientMain(role, userName)
+                mainForm.UserID = userId
+                mainForm.Token = frmConnect.Token
                 mainForm.Show()
                 Me.Hide()
             Else
-                MessageBox.Show(parts(3), "Login Failed") ' parts(3) is the error message
+                MessageBox.Show(parts(3), "Login Failed")
             End If
         Catch ex As Exception
             MessageBox.Show("Error communicating with server: " & ex.Message)
+            ' If the connection dropped, go back to Connect screen
+            frmConnect.DisposeConnection()
+            Dim cf As New frmConnect()
+            cf.Show()
+            Me.Hide()
         End Try
     End Sub
+
     Private Sub lnkSignUp_Click(sender As Object, e As EventArgs)
         Dim frm As New frmSignUp()
         frm.ShowDialog()
