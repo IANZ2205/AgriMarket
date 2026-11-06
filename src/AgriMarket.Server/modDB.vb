@@ -142,6 +142,17 @@ Public Module modDB
                     cmd.ExecuteNonQuery()
                 End Using
 
+                Dim sqlAlloc As String = "
+                    CREATE TABLE IF NOT EXISTS OrderAllocations (
+                        AllocID INTEGER PRIMARY KEY AUTOINCREMENT,
+                        OrderID INTEGER NOT NULL,
+                        BatchID INTEGER NOT NULL,
+                        Qty REAL NOT NULL
+                    );"
+                Using cmd As New SqliteCommand(sqlAlloc, conn)
+                    cmd.ExecuteNonQuery()
+                End Using
+
                 Dim sqlNotif As String = "
                     CREATE TABLE IF NOT EXISTS Notifications (
                         NotifID INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -155,6 +166,41 @@ Public Module modDB
                         CreatedAt TEXT DEFAULT CURRENT_TIMESTAMP
                     );"
                 Using cmd As New SqliteCommand(sqlNotif, conn)
+                    cmd.ExecuteNonQuery()
+                End Using
+
+
+                Dim sqlConv As String = "
+                    CREATE TABLE IF NOT EXISTS Conversations (
+                        ConvID INTEGER PRIMARY KEY AUTOINCREMENT,
+                        UserLowID INTEGER NOT NULL,
+                        UserHighID INTEGER NOT NULL,
+                        CreatedAt TEXT DEFAULT CURRENT_TIMESTAMP,
+                        LastMessageAt TEXT DEFAULT CURRENT_TIMESTAMP,
+                        UNIQUE (UserLowID, UserHighID)
+                    );"
+                Using cmd As New SqliteCommand(sqlConv, conn)
+                    cmd.ExecuteNonQuery()
+                End Using
+
+                Dim sqlMsgs As String = "
+                    CREATE TABLE IF NOT EXISTS Messages (
+                        MessageID INTEGER PRIMARY KEY AUTOINCREMENT,
+                        ConvID INTEGER NOT NULL,
+                        SenderID INTEGER,
+                        MsgType TEXT(10) DEFAULT 'Text',
+                        Body TEXT,
+                        FileName TEXT(60),
+                        OriginalName TEXT(100),
+                        FileSize INTEGER,
+                        LocationText TEXT(200),
+                        ItemID INTEGER,
+                        OrderID INTEGER,
+                        SentAt TEXT DEFAULT CURRENT_TIMESTAMP,
+                        DeliveredAt TEXT,
+                        ReadAt TEXT
+                    );"
+                Using cmd As New SqliteCommand(sqlMsgs, conn)
                     cmd.ExecuteNonQuery()
                 End Using
 
@@ -702,6 +748,466 @@ Public Module modDB
             MessageBox.Show("Error fetching orders: " & ex.Message)
         End Try
         Return dt
+    End Function
+
+
+    Public Function ConfirmOrder(orderId As Integer) As String
+        Try
+            Using conn As New SqliteConnection(ConnString)
+                conn.Open()
+                Using transaction = conn.BeginTransaction()
+                    Try
+                        ' 1. Get order details
+                        Dim itemId As Integer = 0
+                        Dim qty As Double = 0
+                        Dim sqlGet As String = "SELECT ItemID, Qty FROM Orders WHERE OrderID = @id AND Status = 'Pending'"
+                        Using cmd As New SqliteCommand(sqlGet, conn, transaction)
+                            cmd.Parameters.AddWithValue("@id", orderId)
+                            Using reader As SqliteDataReader = cmd.ExecuteReader()
+                                If Not reader.Read() Then
+                                    transaction.Rollback()
+                                    Return "ERR|INVALID_STATE|Order not found or not pending"
+                                End If
+                                itemId = Convert.ToInt32(reader("ItemID"))
+                                qty = Convert.ToDouble(reader("Qty"))
+                            End Using
+                        End Using
+
+                        ' 2. Check available stock
+                        Dim available As Double = 0
+                        Dim sqlAvail As String = "SELECT IFNULL(SUM(QtyRemaining - QtyReserved), 0) FROM Batches WHERE ItemID = @id AND Status = 'Active' AND ExpiryDate > datetime('now')"
+                        Using cmd As New SqliteCommand(sqlAvail, conn, transaction)
+                            cmd.Parameters.AddWithValue("@id", itemId)
+                            available = Convert.ToDouble(cmd.ExecuteScalar())
+                        End Using
+
+                        If available < qty Then
+                            transaction.Rollback()
+                            Return $"ERR|NOT_ENOUGH_STOCK|Only {available} available"
+                        End If
+
+                        ' 3. Allocate stock using FEFO (First Expired, First Out)
+                        Dim batches As New List(Of Tuple(Of Integer, Double))
+                        Dim sqlBatches As String = "SELECT BatchID, QtyRemaining - QtyReserved FROM Batches WHERE ItemID = @id AND Status = 'Active' AND ExpiryDate > datetime('now') AND (QtyRemaining - QtyReserved) > 0 ORDER BY ExpiryDate ASC"
+                        Using cmd As New SqliteCommand(sqlBatches, conn, transaction)
+                            cmd.Parameters.AddWithValue("@id", itemId)
+                            Using reader As SqliteDataReader = cmd.ExecuteReader()
+                                While reader.Read()
+                                    batches.Add(New Tuple(Of Integer, Double)(reader.GetInt32(0), reader.GetDouble(1)))
+                                End While
+                            End Using
+                        End Using
+
+                        Dim remainingToAllocate As Double = qty
+                        For Each b In batches
+                            If remainingToAllocate <= 0 Then Exit For
+                            Dim allocQty As Double = Math.Min(b.Item2, remainingToAllocate)
+
+                            ' Reserve the quantity
+                            Dim sqlReserve As String = "UPDATE Batches SET QtyReserved = QtyReserved + @qty WHERE BatchID = @id"
+                            Using cmd As New SqliteCommand(sqlReserve, conn, transaction)
+                                cmd.Parameters.AddWithValue("@qty", allocQty)
+                                cmd.Parameters.AddWithValue("@id", b.Item1)
+                                cmd.ExecuteNonQuery()
+                            End Using
+
+                            ' Log the allocation
+                            Dim sqlAlloc As String = "INSERT INTO OrderAllocations (OrderID, BatchID, Qty) VALUES (@oid, @bid, @qty)"
+                            Using cmd As New SqliteCommand(sqlAlloc, conn, transaction)
+                                cmd.Parameters.AddWithValue("@oid", orderId)
+                                cmd.Parameters.AddWithValue("@bid", b.Item1)
+                                cmd.Parameters.AddWithValue("@qty", allocQty)
+                                cmd.ExecuteNonQuery()
+                            End Using
+
+                            remainingToAllocate -= allocQty
+                        Next
+
+                        ' 4. Update order status
+                        Dim sqlUpdate As String = "UPDATE Orders SET Status = 'Confirmed', ConfirmedAt = datetime('now') WHERE OrderID = @id"
+                        Using cmd As New SqliteCommand(sqlUpdate, conn, transaction)
+                            cmd.Parameters.AddWithValue("@id", orderId)
+                            cmd.ExecuteNonQuery()
+                        End Using
+
+                        ' 5. Log event
+                        Dim sqlEvent As String = "INSERT INTO OrderEvents (OrderID, Status, EventAt, Comment) VALUES (@id, 'Confirmed', datetime('now'), 'Order confirmed')"
+                        Using cmd As New SqliteCommand(sqlEvent, conn, transaction)
+                            cmd.Parameters.AddWithValue("@id", orderId)
+                            cmd.ExecuteNonQuery()
+                        End Using
+
+                        transaction.Commit()
+                        Return "OK"
+                    Catch ex As Exception
+                        transaction.Rollback()
+                        Throw
+                    End Try
+                End Using
+            End Using
+        Catch ex As Exception
+            MessageBox.Show("Error confirming order: " & ex.Message)
+            Return "ERR|VALIDATION|Database error"
+        End Try
+    End Function
+
+    Public Function RejectOrder(orderId As Integer, reason As String) As String
+        Try
+            Using conn As New SqliteConnection(ConnString)
+                conn.Open()
+                Dim sql As String = "UPDATE Orders SET Status = 'Rejected', ReasonComment = @reason, ClosedAt = datetime('now') WHERE OrderID = @id AND Status = 'Pending'"
+                Using cmd As New SqliteCommand(sql, conn)
+                    cmd.Parameters.AddWithValue("@reason", reason)
+                    cmd.Parameters.AddWithValue("@id", orderId)
+                    If cmd.ExecuteNonQuery() = 0 Then Return "ERR|INVALID_STATE|Order not found or not pending"
+                End Using
+
+                Dim sqlEvent As String = "INSERT INTO OrderEvents (OrderID, Status, EventAt, Comment) VALUES (@id, 'Rejected', datetime('now'), @comment)"
+                Using cmd As New SqliteCommand(sqlEvent, conn)
+                    cmd.Parameters.AddWithValue("@id", orderId)
+                    cmd.Parameters.AddWithValue("@comment", "Rejected: " & reason)
+                    cmd.ExecuteNonQuery()
+                End Using
+
+                Return "OK"
+            End Using
+        Catch ex As Exception
+            MessageBox.Show("Error rejecting order: " & ex.Message)
+            Return "ERR|VALIDATION|Database error"
+        End Try
+    End Function
+
+    Public Function CompleteOrder(orderId As Integer) As String
+        Try
+            Using conn As New SqliteConnection(ConnString)
+                conn.Open()
+                Using transaction = conn.BeginTransaction()
+                    Try
+                        ' 1. Get allocations
+                        Dim allocations As New List(Of Tuple(Of Integer, Double))
+                        Dim sqlAlloc As String = "SELECT BatchID, Qty FROM OrderAllocations WHERE OrderID = @id"
+                        Using cmd As New SqliteCommand(sqlAlloc, conn, transaction)
+                            cmd.Parameters.AddWithValue("@id", orderId)
+                            Using reader As SqliteDataReader = cmd.ExecuteReader()
+                                While reader.Read()
+                                    allocations.Add(New Tuple(Of Integer, Double)(reader.GetInt32(0), reader.GetDouble(1)))
+                                End While
+                            End Using
+                        End Using
+
+                        ' 2. Deduct from batches
+                        For Each a In allocations
+                            Dim sqlDeduct As String = "UPDATE Batches SET QtyRemaining = QtyRemaining - @qty, QtyReserved = QtyReserved - @qty WHERE BatchID = @id"
+                            Using cmd As New SqliteCommand(sqlDeduct, conn, transaction)
+                                cmd.Parameters.AddWithValue("@qty", a.Item2)
+                                cmd.Parameters.AddWithValue("@id", a.Item1)
+                                cmd.ExecuteNonQuery()
+                            End Using
+                        Next
+
+                        ' 3. Update order status
+                        Dim sqlUpdate As String = "UPDATE Orders SET Status = 'Completed', ClosedAt = datetime('now') WHERE OrderID = @id"
+                        Using cmd As New SqliteCommand(sqlUpdate, conn, transaction)
+                            cmd.Parameters.AddWithValue("@id", orderId)
+                            cmd.ExecuteNonQuery()
+                        End Using
+
+                        ' 4. Log event
+                        Dim sqlEvent As String = "INSERT INTO OrderEvents (OrderID, Status, EventAt, Comment) VALUES (@id, 'Completed', datetime('now'), 'Order completed')"
+                        Using cmd As New SqliteCommand(sqlEvent, conn, transaction)
+                            cmd.Parameters.AddWithValue("@id", orderId)
+                            cmd.ExecuteNonQuery()
+                        End Using
+
+                        transaction.Commit()
+                        Return "OK"
+                    Catch ex As Exception
+                        transaction.Rollback()
+                        Throw
+                    End Try
+                End Using
+            End Using
+        Catch ex As Exception
+            MessageBox.Show("Error completing order: " & ex.Message)
+            Return "ERR|VALIDATION|Database error"
+        End Try
+    End Function
+
+
+    Public Function GetNotifications(userId As Integer) As DataTable
+        Dim dt As New DataTable()
+        Try
+            Using conn As New SqliteConnection(ConnString)
+                conn.Open()
+                Dim sql As String = "SELECT NotifID, NotifType, Title, Body, RelatedType, RelatedID, IsRead, CreatedAt FROM Notifications WHERE UserID = @uid ORDER BY CreatedAt DESC"
+                Using cmd As New SqliteCommand(sql, conn)
+                    cmd.Parameters.AddWithValue("@uid", userId)
+                    Using reader As SqliteDataReader = cmd.ExecuteReader()
+                        dt.Load(reader)
+                    End Using
+                End Using
+            End Using
+        Catch ex As Exception
+            MessageBox.Show("Error fetching notifications: " & ex.Message)
+        End Try
+        Return dt
+    End Function
+
+    Public Sub MarkNotificationRead(notifId As Integer)
+        Try
+            Using conn As New SqliteConnection(ConnString)
+                conn.Open()
+                Dim sql As String = "UPDATE Notifications SET IsRead = 1 WHERE NotifID = @id"
+                Using cmd As New SqliteCommand(sql, conn)
+                    cmd.Parameters.AddWithValue("@id", notifId)
+                    cmd.ExecuteNonQuery()
+                End Using
+            End Using
+        Catch ex As Exception
+            MessageBox.Show("Error marking notification read: " & ex.Message)
+        End Try
+    End Sub
+
+    Public Function GetUnreadNotificationCount(userId As Integer) As Integer
+        Try
+            Using conn As New SqliteConnection(ConnString)
+                conn.Open()
+                Dim sql As String = "SELECT COUNT(*) FROM Notifications WHERE UserID = @uid AND IsRead = 0"
+                Using cmd As New SqliteCommand(sql, conn)
+                    cmd.Parameters.AddWithValue("@uid", userId)
+                    Return Convert.ToInt32(cmd.ExecuteScalar())
+                End Using
+            End Using
+        Catch ex As Exception
+            Return 0
+        End Try
+    End Function
+
+
+    Public Function GetOrCreateConversation(userA As Integer, userB As Integer) As Integer
+        Dim lowId As Integer = Math.Min(userA, userB)
+        Dim highId As Integer = Math.Max(userA, userB)
+        Try
+            Using conn As New SqliteConnection(ConnString)
+                conn.Open()
+                Dim checkSql As String = "SELECT ConvID FROM Conversations WHERE UserLowID = @low AND UserHighID = @high"
+                Using cmd As New SqliteCommand(checkSql, conn)
+                    cmd.Parameters.AddWithValue("@low", lowId)
+                    cmd.Parameters.AddWithValue("@high", highId)
+                    Dim res = cmd.ExecuteScalar()
+                    If res IsNot Nothing Then Return Convert.ToInt32(res)
+                End Using
+                Dim insertSql As String = "INSERT INTO Conversations (UserLowID, UserHighID) VALUES (@low, @high); SELECT last_insert_rowid();"
+                Using cmd As New SqliteCommand(insertSql, conn)
+                    cmd.Parameters.AddWithValue("@low", lowId)
+                    cmd.Parameters.AddWithValue("@high", highId)
+                    Return Convert.ToInt32(cmd.ExecuteScalar())
+                End Using
+            End Using
+        Catch ex As Exception
+            MessageBox.Show("Error opening conversation: " & ex.Message)
+            Return -1
+        End Try
+    End Function
+
+    Public Function GetChatList(userId As Integer) As DataTable
+        Dim dt As New DataTable()
+        Try
+            Using conn As New SqliteConnection(ConnString)
+                conn.Open()
+                Dim sql As String = "
+                    SELECT 
+                        c.ConvID,
+                        CASE WHEN c.UserLowID = @uid THEN c.UserHighID ELSE c.UserLowID END AS OtherUserID,
+                        u.DisplayName AS OtherUserName,
+                        u.Role AS OtherUserRole,
+                        (SELECT Body FROM Messages WHERE ConvID = c.ConvID ORDER BY MessageID DESC LIMIT 1) AS LastMessage,
+                        c.LastMessageAt,
+                        (SELECT COUNT(*) FROM Messages WHERE ConvID = c.ConvID AND SenderID <> @uid AND ReadAt IS NULL) AS UnreadCount
+                    FROM Conversations c
+                    JOIN Users u ON (CASE WHEN c.UserLowID = @uid THEN c.UserHighID ELSE c.UserLowID END) = u.UserID
+                    WHERE c.UserLowID = @uid OR c.UserHighID = @uid
+                    ORDER BY c.LastMessageAt DESC"
+                Using cmd As New SqliteCommand(sql, conn)
+                    cmd.Parameters.AddWithValue("@uid", userId)
+                    Using reader As SqliteDataReader = cmd.ExecuteReader()
+                        dt.Load(reader)
+                    End Using
+                End Using
+            End Using
+        Catch ex As Exception
+            MessageBox.Show("Error loading chats: " & ex.Message)
+        End Try
+        Return dt
+    End Function
+
+    Public Function GetMessages(convId As Integer) As DataTable
+        Dim dt As New DataTable()
+        Try
+            Using conn As New SqliteConnection(ConnString)
+                conn.Open()
+                Dim sql As String = "SELECT MessageID, SenderID, MsgType, Body, SentAt, DeliveredAt, ReadAt FROM Messages WHERE ConvID = @id ORDER BY MessageID ASC"
+                Using cmd As New SqliteCommand(sql, conn)
+                    cmd.Parameters.AddWithValue("@id", convId)
+                    Using reader As SqliteDataReader = cmd.ExecuteReader()
+                        dt.Load(reader)
+                    End Using
+                End Using
+            End Using
+        Catch ex As Exception
+            MessageBox.Show("Error loading messages: " & ex.Message)
+        End Try
+        Return dt
+    End Function
+
+    Public Function SendMessage(convId As Integer, senderId As Integer, body As String) As Integer
+        Try
+            Using conn As New SqliteConnection(ConnString)
+                conn.Open()
+                Dim sql As String = "INSERT INTO Messages (ConvID, SenderID, MsgType, Body) VALUES (@cid, @sid, 'Text', @body); SELECT last_insert_rowid();"
+                Dim msgId As Integer
+                Using cmd As New SqliteCommand(sql, conn)
+                    cmd.Parameters.AddWithValue("@cid", convId)
+                    cmd.Parameters.AddWithValue("@sid", senderId)
+                    cmd.Parameters.AddWithValue("@body", body)
+                    msgId = Convert.ToInt32(cmd.ExecuteScalar())
+                End Using
+                Dim sqlUpd As String = "UPDATE Conversations SET LastMessageAt = datetime('now') WHERE ConvID = @id"
+                Using cmd As New SqliteCommand(sqlUpd, conn)
+                    cmd.Parameters.AddWithValue("@id", convId)
+                    cmd.ExecuteNonQuery()
+                End Using
+                Return msgId
+            End Using
+        Catch ex As Exception
+            MessageBox.Show("Error sending message: " & ex.Message)
+            Return -1
+        End Try
+    End Function
+
+    Public Sub MarkMessagesRead(convId As Integer, userId As Integer)
+        Try
+            Using conn As New SqliteConnection(ConnString)
+                conn.Open()
+                Dim sql As String = "UPDATE Messages SET ReadAt = datetime('now') WHERE ConvID = @cid AND SenderID <> @uid AND ReadAt IS NULL"
+                Using cmd As New SqliteCommand(sql, conn)
+                    cmd.Parameters.AddWithValue("@cid", convId)
+                    cmd.Parameters.AddWithValue("@uid", userId)
+                    cmd.ExecuteNonQuery()
+                End Using
+            End Using
+        Catch ex As Exception
+        End Try
+    End Sub
+
+
+    Public Function GetBuyerOrders(buyerId As Integer) As DataTable
+        Dim dt As New DataTable()
+        Try
+            Using conn As New SqliteConnection(ConnString)
+                conn.Open()
+                Dim sql As String = "
+                    SELECT 
+                        o.OrderID,
+                        o.OrderNo,
+                        o.Status,
+                        o.Qty,
+                        o.TotalAmount,
+                        o.CreatedAt,
+                        i.EnglishName AS ItemName,
+                        i.Unit AS ItemUnit,
+                        u.DisplayName AS TraderName,
+                        u.Phone AS TraderPhone,
+                        o.ReasonComment
+                    FROM Orders o
+                    JOIN Items i ON o.ItemID = i.ItemID
+                    JOIN Users u ON o.TraderID = u.UserID
+                    WHERE o.BuyerID = @bid
+                    ORDER BY o.CreatedAt DESC"
+                Using cmd As New SqliteCommand(sql, conn)
+                    cmd.Parameters.AddWithValue("@bid", buyerId)
+                    Using reader As SqliteDataReader = cmd.ExecuteReader()
+                        dt.Load(reader)
+                    End Using
+                End Using
+            End Using
+        Catch ex As Exception
+            MessageBox.Show("Error fetching buyer orders: " & ex.Message)
+        End Try
+        Return dt
+    End Function
+
+    Public Function CancelOrder(orderId As Integer, byUser As String) As String
+        Try
+            Using conn As New SqliteConnection(ConnString)
+                conn.Open()
+                Using transaction = conn.BeginTransaction()
+                    Try
+                        ' Get current status
+                        Dim status As String = ""
+                        Dim sqlGet As String = "SELECT Status FROM Orders WHERE OrderID = @id"
+                        Using cmd As New SqliteCommand(sqlGet, conn, transaction)
+                            cmd.Parameters.AddWithValue("@id", orderId)
+                            Dim res = cmd.ExecuteScalar()
+                            If res IsNot Nothing Then status = res.ToString()
+                        End Using
+
+                        If status <> "Pending" AndAlso status <> "Confirmed" Then
+                            transaction.Rollback()
+                            Return "ERR|INVALID_STATE|Cannot cancel in this state"
+                        End If
+
+                        ' If it was Confirmed, release the reserved stock
+                        If status = "Confirmed" Then
+                            Dim allocations As New List(Of Tuple(Of Integer, Double))
+                            Dim sqlAlloc As String = "SELECT BatchID, Qty FROM OrderAllocations WHERE OrderID = @id"
+                            Using cmd As New SqliteCommand(sqlAlloc, conn, transaction)
+                                cmd.Parameters.AddWithValue("@id", orderId)
+                                Using reader As SqliteDataReader = cmd.ExecuteReader()
+                                    While reader.Read()
+                                        allocations.Add(New Tuple(Of Integer, Double)(reader.GetInt32(0), reader.GetDouble(1)))
+                                    End While
+                                End Using
+                            End Using
+
+                            For Each a In allocations
+                                Dim sqlRelease As String = "UPDATE Batches SET QtyReserved = QtyReserved - @qty WHERE BatchID = @id"
+                                Using cmd As New SqliteCommand(sqlRelease, conn, transaction)
+                                    cmd.Parameters.AddWithValue("@qty", a.Item2)
+                                    cmd.Parameters.AddWithValue("@id", a.Item1)
+                                    cmd.ExecuteNonQuery()
+                                End Using
+                            Next
+                        End If
+
+                        ' Update order status
+                        Dim sqlUpdate As String = "UPDATE Orders SET Status = 'Cancelled', ClosedAt = datetime('now'), ReasonComment = @reason WHERE OrderID = @id"
+                        Using cmd As New SqliteCommand(sqlUpdate, conn, transaction)
+                            cmd.Parameters.AddWithValue("@reason", "Cancelled by " & byUser)
+                            cmd.Parameters.AddWithValue("@id", orderId)
+                            cmd.ExecuteNonQuery()
+                        End Using
+
+                        ' Log event
+                        Dim sqlEvent As String = "INSERT INTO OrderEvents (OrderID, Status, EventAt, Comment) VALUES (@id, 'Cancelled', datetime('now'), @comment)"
+                        Using cmd As New SqliteCommand(sqlEvent, conn, transaction)
+                            cmd.Parameters.AddWithValue("@id", orderId)
+                            cmd.Parameters.AddWithValue("@comment", "Cancelled by " & byUser)
+                            cmd.ExecuteNonQuery()
+                        End Using
+
+                        transaction.Commit()
+                        Return "OK"
+                    Catch ex As Exception
+                        transaction.Rollback()
+                        Throw
+                    End Try
+                End Using
+            End Using
+        Catch ex As Exception
+            MessageBox.Show("Error cancelling order: " & ex.Message)
+            Return "ERR|VALIDATION|Database error"
+        End Try
     End Function
 
 End Module

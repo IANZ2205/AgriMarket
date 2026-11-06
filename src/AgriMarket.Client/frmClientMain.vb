@@ -165,6 +165,24 @@ Public Class frmClientMain
                 ordersScreen.Token = Token
                 contentPanel.Controls.Add(ordersScreen)
 
+            Case "Notifications"
+                Dim notifs As New ucNotifications()
+                notifs.Token = Token
+                notifs.UserID = UserID
+                contentPanel.Controls.Add(notifs)
+
+            Case "Chats"
+                Dim chats As New ucChats()
+                chats.Token = Token
+                chats.UserID = UserID
+                contentPanel.Controls.Add(chats)
+
+            Case "My Orders"
+                Dim buyerOrders As New ucBuyerOrders()
+                buyerOrders.Token = Token
+                buyerOrders.BuyerID = UserID
+                contentPanel.Controls.Add(buyerOrders)
+
             Case Else
                 Dim lblPlaceholder As New Label()
                 lblPlaceholder.Text = menuText & " Screen Coming Soon"

@@ -322,6 +322,198 @@ Public Module modServer
                         Dim replyBytes As Byte() = Encoding.UTF8.GetBytes(sbReply.ToString())
                         stream.Write(replyBytes, 0, replyBytes.Length)
 
+                    ElseIf parts(0) = "ORDER_CONFIRM" Then
+                        Dim reqId As String = parts(1)
+                        Dim orderId As Integer = Integer.Parse(parts(3))
+                        Dim result As String = modDB.ConfirmOrder(orderId)
+
+                        If result = "OK" Then
+                            Dim reply As String = $"OK|{reqId}|Confirmed" & vbCrLf
+                            Dim replyBytes As Byte() = Encoding.UTF8.GetBytes(reply)
+                            stream.Write(replyBytes, 0, replyBytes.Length)
+                        Else
+                            Dim reply As String = $"ERR|{reqId}|{result.Split("|"c)(1)}|{result.Split("|"c)(2)}" & vbCrLf
+                            Dim replyBytes As Byte() = Encoding.UTF8.GetBytes(reply)
+                            stream.Write(replyBytes, 0, replyBytes.Length)
+                        End If
+
+                    ElseIf parts(0) = "ORDER_REJECT" Then
+                        Dim reqId As String = parts(1)
+                        Dim orderId As Integer = Integer.Parse(parts(3))
+                        Dim reason As String = parts(4)
+                        Dim result As String = modDB.RejectOrder(orderId, reason)
+
+                        If result = "OK" Then
+                            Dim reply As String = $"OK|{reqId}|Rejected" & vbCrLf
+                            Dim replyBytes As Byte() = Encoding.UTF8.GetBytes(reply)
+                            stream.Write(replyBytes, 0, replyBytes.Length)
+                        Else
+                            Dim reply As String = $"ERR|{reqId}|{result.Split("|"c)(1)}|{result.Split("|"c)(2)}" & vbCrLf
+                            Dim replyBytes As Byte() = Encoding.UTF8.GetBytes(reply)
+                            stream.Write(replyBytes, 0, replyBytes.Length)
+                        End If
+
+                    ElseIf parts(0) = "ORDER_COMPLETE" Then
+                        Dim reqId As String = parts(1)
+                        Dim orderId As Integer = Integer.Parse(parts(3))
+                        Dim result As String = modDB.CompleteOrder(orderId)
+
+                        If result = "OK" Then
+                            Dim reply As String = $"OK|{reqId}|Completed" & vbCrLf
+                            Dim replyBytes As Byte() = Encoding.UTF8.GetBytes(reply)
+                            stream.Write(replyBytes, 0, replyBytes.Length)
+                        Else
+                            Dim reply As String = $"ERR|{reqId}|{result.Split("|"c)(1)}|{result.Split("|"c)(2)}" & vbCrLf
+                            Dim replyBytes As Byte() = Encoding.UTF8.GetBytes(reply)
+                            stream.Write(replyBytes, 0, replyBytes.Length)
+                        End If
+
+                    ElseIf parts(0) = "NOTIF_LIST" Then
+                        Dim reqId As String = parts(1)
+                        Dim userId As Integer = Integer.Parse(parts(3))
+                        Dim dt As DataTable = modDB.GetNotifications(userId)
+                        Dim sbReply As New StringBuilder()
+                        sbReply.AppendLine($"OK|{reqId}")
+                        For Each row As DataRow In dt.Rows
+                            sbReply.AppendLine("NOTIF|" &
+                                row("NotifID").ToString() & "|" &
+                                row("NotifType").ToString() & "|" &
+                                row("Title").ToString() & "|" &
+                                row("Body").ToString() & "|" &
+                                row("IsRead").ToString() & "|" &
+                                row("CreatedAt").ToString())
+                        Next
+                        sbReply.AppendLine("END")
+                        Dim replyBytes As Byte() = Encoding.UTF8.GetBytes(sbReply.ToString())
+                        stream.Write(replyBytes, 0, replyBytes.Length)
+
+                    ElseIf parts(0) = "NOTIF_READ" Then
+                        Dim reqId As String = parts(1)
+                        Dim notifId As Integer = Integer.Parse(parts(3))
+                        modDB.MarkNotificationRead(notifId)
+                        Dim reply As String = $"OK|{reqId}|Read" & vbCrLf
+                        Dim replyBytes As Byte() = Encoding.UTF8.GetBytes(reply)
+                        stream.Write(replyBytes, 0, replyBytes.Length)
+
+                    ElseIf parts(0) = "NOTIF_COUNT" Then
+                        Dim reqId As String = parts(1)
+                        Dim userId As Integer = Integer.Parse(parts(3))
+                        Dim count As Integer = modDB.GetUnreadNotificationCount(userId)
+                        Dim reply As String = $"OK|{reqId}|{count}" & vbCrLf
+                        Dim replyBytes As Byte() = Encoding.UTF8.GetBytes(reply)
+                        stream.Write(replyBytes, 0, replyBytes.Length)
+
+
+                    ElseIf parts(0) = "CHAT_LIST" Then
+                        Dim reqId As String = parts(1)
+                        Dim userId As Integer = Integer.Parse(parts(3))
+                        Dim dt As DataTable = modDB.GetChatList(userId)
+                        Dim sbReply As New StringBuilder()
+                        sbReply.AppendLine($"OK|{reqId}")
+                        For Each row As DataRow In dt.Rows
+                            sbReply.AppendLine("CONV|" &
+                                row("ConvID").ToString() & "|" &
+                                row("OtherUserID").ToString() & "|" &
+                                row("OtherUserName").ToString() & "|" &
+                                row("OtherUserRole").ToString() & "|" &
+                                If(IsDBNull(row("LastMessage")), "", row("LastMessage").ToString()) & "|" &
+                                row("LastMessageAt").ToString() & "|" &
+                                row("UnreadCount").ToString())
+                        Next
+                        sbReply.AppendLine("END")
+                        Dim replyBytes As Byte() = Encoding.UTF8.GetBytes(sbReply.ToString())
+                        stream.Write(replyBytes, 0, replyBytes.Length)
+
+                    ElseIf parts(0) = "CHAT_OPEN" Then
+                        Dim reqId As String = parts(1)
+                        Dim userId As Integer = Integer.Parse(parts(3))
+                        Dim otherId As Integer = Integer.Parse(parts(4))
+                        Dim convId As Integer = modDB.GetOrCreateConversation(userId, otherId)
+                        If convId > 0 Then
+                            Dim dt As DataTable = modDB.GetMessages(convId)
+                            Dim sbReply As New StringBuilder()
+                            sbReply.AppendLine($"OK|{reqId}|{convId}")
+                            For Each row As DataRow In dt.Rows
+                                sbReply.AppendLine("MSG|" &
+                                    row("MessageID").ToString() & "|" &
+                                    row("SenderID").ToString() & "|" &
+                                    row("MsgType").ToString() & "|" &
+                                    If(IsDBNull(row("Body")), "", row("Body").ToString()) & "|" &
+                                    row("SentAt").ToString() & "|" &
+                                    If(IsDBNull(row("ReadAt")), "", row("ReadAt").ToString()))
+                            Next
+                            sbReply.AppendLine("END")
+                            Dim replyBytes As Byte() = Encoding.UTF8.GetBytes(sbReply.ToString())
+                            stream.Write(replyBytes, 0, replyBytes.Length)
+                        Else
+                            Dim reply As String = $"ERR|{reqId}|VALIDATION|Could not open chat" & vbCrLf
+                            Dim replyBytes As Byte() = Encoding.UTF8.GetBytes(reply)
+                            stream.Write(replyBytes, 0, replyBytes.Length)
+                        End If
+
+                    ElseIf parts(0) = "CHAT_SEND" Then
+                        Dim reqId As String = parts(1)
+                        Dim convId As Integer = Integer.Parse(parts(3))
+                        Dim senderId As Integer = Integer.Parse(parts(4))
+                        Dim body As String = parts(5)
+                        Dim msgId As Integer = modDB.SendMessage(convId, senderId, body)
+                        Dim reply As String
+                        If msgId > 0 Then
+                            reply = $"OK|{reqId}|{msgId}" & vbCrLf
+                        Else
+                            reply = $"ERR|{reqId}|VALIDATION|Message failed" & vbCrLf
+                        End If
+                        Dim replyBytes As Byte() = Encoding.UTF8.GetBytes(reply)
+                        stream.Write(replyBytes, 0, replyBytes.Length)
+
+                    ElseIf parts(0) = "CHAT_READ" Then
+                        Dim reqId As String = parts(1)
+                        Dim convId As Integer = Integer.Parse(parts(3))
+                        Dim userId As Integer = Integer.Parse(parts(4))
+                        modDB.MarkMessagesRead(convId, userId)
+                        Dim reply As String = $"OK|{reqId}|Read" & vbCrLf
+                        Dim replyBytes As Byte() = Encoding.UTF8.GetBytes(reply)
+                        stream.Write(replyBytes, 0, replyBytes.Length)
+
+
+                    ElseIf parts(0) = "BUYER_ORDERS" Then
+                        Dim reqId As String = parts(1)
+                        Dim buyerId As Integer = Integer.Parse(parts(3))
+                        Dim dt As DataTable = modDB.GetBuyerOrders(buyerId)
+                        Dim sbReply As New StringBuilder()
+                        sbReply.AppendLine($"OK|{reqId}")
+                        For Each row As DataRow In dt.Rows
+                            sbReply.AppendLine("BORDER|" &
+                                row("OrderID").ToString() & "|" &
+                                row("OrderNo").ToString() & "|" &
+                                row("ItemName").ToString() & "|" &
+                                Convert.ToDouble(row("Qty")).ToString("F2") & "|" &
+                                row("ItemUnit").ToString() & "|" &
+                                Convert.ToDecimal(row("TotalAmount")).ToString("F0") & "|" &
+                                row("Status").ToString() & "|" &
+                                row("TraderName").ToString() & "|" &
+                                row("CreatedAt").ToString() & "|" &
+                                If(IsDBNull(row("ReasonComment")), "", row("ReasonComment").ToString()))
+                        Next
+                        sbReply.AppendLine("END")
+                        Dim replyBytes As Byte() = Encoding.UTF8.GetBytes(sbReply.ToString())
+                        stream.Write(replyBytes, 0, replyBytes.Length)
+
+                    ElseIf parts(0) = "ORDER_CANCEL" Then
+                        Dim reqId As String = parts(1)
+                        Dim orderId As Integer = Integer.Parse(parts(3))
+                        Dim result As String = modDB.CancelOrder(orderId, "Buyer")
+                        If result = "OK" Then
+                            Dim reply As String = $"OK|{reqId}|Cancelled" & vbCrLf
+                            Dim replyBytes As Byte() = Encoding.UTF8.GetBytes(reply)
+                            stream.Write(replyBytes, 0, replyBytes.Length)
+                        Else
+                            Dim reply As String = $"ERR|{reqId}|{result.Split("|"c)(1)}|{result.Split("|"c)(2)}" & vbCrLf
+                            Dim replyBytes As Byte() = Encoding.UTF8.GetBytes(reply)
+                            stream.Write(replyBytes, 0, replyBytes.Length)
+                        End If
+
+
                     ElseIf parts(0) = "LOGOUT" Then
                         ' Client will close the socket
                     End If

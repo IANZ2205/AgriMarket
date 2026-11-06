@@ -19,6 +19,8 @@ Public Class frmProductDetail
     Private lblDesc As New Label()
     Private lblFresh As New Label()
     Private btnPlaceOrder As New Button()
+    Private _traderID As Integer
+    Private _traderName As String
 
     Private _availableQty As Double = 0
     Private _unit As String = ""
@@ -85,6 +87,19 @@ Public Class frmProductDetail
         AddHandler btnPlaceOrder.Click, AddressOf btnPlaceOrder_Click
         Me.Controls.Add(btnPlaceOrder)
 
+        Dim btnChat As New Button()
+        btnChat.Text = "Chat with Trader"
+        btnChat.BackColor = modTheme.cWhite
+        btnChat.ForeColor = modTheme.cOcean
+        btnChat.FlatStyle = FlatStyle.Flat
+        btnChat.FlatAppearance.BorderColor = modTheme.cOcean
+        btnChat.FlatAppearance.BorderSize = 1
+        btnChat.Location = New Point(220, 380)
+        btnChat.Size = New Size(180, 45)
+        btnChat.Font = New Font("Segoe UI", 10, FontStyle.Bold)
+        AddHandler btnChat.Click, AddressOf btnChat_Click
+        Me.Controls.Add(btnChat)
+
         Dim btnClose As New Button()
         btnClose.Text = "Close"
         btnClose.BackColor = modTheme.cWhite
@@ -128,6 +143,8 @@ Public Class frmProductDetail
 
                 ' Trader details
                 lblTrader.Text = "By: " & parts(9) & "  |  " & parts(10)
+                _traderID = Integer.Parse(parts(11))
+                _traderName = parts(9)
 
                 ' Price and Quantity
                 lblPrice.Text = "UGX " & parts(8) & " / " & parts(7)
@@ -174,4 +191,14 @@ Public Class frmProductDetail
             Me.Close()
         End If
     End Sub
+
+    Private Sub btnChat_Click(sender As Object, e As EventArgs)
+        Dim chatForm As New frmChatWithTrader()
+        chatForm.Token = Token
+        chatForm.UserID = BuyerID
+        chatForm.TraderID = _traderID
+        chatForm.TraderName = _traderName
+        chatForm.ShowDialog()
+    End Sub
+
 End Class
