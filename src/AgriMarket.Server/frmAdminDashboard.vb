@@ -1,7 +1,12 @@
-﻿Imports AgriMarket.Shared
+﻿Imports System.IO
+Imports AgriMarket.Shared
 Imports AgriMarket.[Shared].AgriMarket.[Shared]
+Imports Microsoft.Data.Sqlite
 
 Public Class frmAdminDashboard
+    Private contentPanel As Panel
+    Private menuLabels As New List(Of Label)
+
     Private Sub frmAdminDashboard_Load(sender As Object, e As EventArgs) Handles MyBase.Load
         Me.Text = "AgriMarket - Admin Dashboard"
         Me.WindowState = FormWindowState.Maximized
@@ -10,6 +15,7 @@ Public Class frmAdminDashboard
 
         BuildContentArea()
         BuildTopBar()
+        LoadDashboard()
     End Sub
 
     Private Sub BuildTopBar()
@@ -27,48 +33,106 @@ Public Class frmAdminDashboard
         lblLogo.AutoSize = True
         topBar.Controls.Add(lblLogo)
 
-        Dim menuX As Integer = 200
-        Dim menus As String() = {"Dashboard", "Users", "Listings", "Orders"}
+        Dim menus As String() = {"Dashboard", "Users", "Listings", "Orders", "Reports", "Logs", "Connected", "Console", "Performance", "Settings"}
+        Dim pnlMenu As New FlowLayoutPanel()
+        pnlMenu.Dock = DockStyle.Fill
+        pnlMenu.WrapContents = False
+        pnlMenu.FlowDirection = FlowDirection.LeftToRight
+        pnlMenu.Padding = New Padding(180, 22, 0, 0)
+        pnlMenu.BackColor = Color.Transparent
+        topBar.Controls.Add(pnlMenu)
+        pnlMenu.BringToFront()
 
+        ' --- 3. Loop through the menus ---
         For Each menuText In menus
             Dim lblMenu As New Label()
             lblMenu.Text = menuText
             lblMenu.Font = New Font("Segoe UI", 10, FontStyle.Regular)
             lblMenu.ForeColor = modTheme.cWhite
-            lblMenu.Location = New Point(menuX, 20)
             lblMenu.AutoSize = True
             lblMenu.Cursor = Cursors.Hand
-
-            If menuText = "Dashboard" Then
-                lblMenu.Font = New Font("Segoe UI", 10, FontStyle.Bold)
-                Dim pill As New Panel()
-                pill.BackColor = modTheme.cTeal
-                pill.Size = New Size(lblMenu.Width, 3)
-                pill.Location = New Point(menuX, 42)
-                topBar.Controls.Add(pill)
-            End If
-
-            topBar.Controls.Add(lblMenu)
-            menuX += lblMenu.Width + 30
+            lblMenu.Margin = New Padding(0, 0, 30, 0)
+            AddHandler lblMenu.Click, Sub(s, ev) LoadScreen(menuText)
+            pnlMenu.Controls.Add(lblMenu)
+            menuLabels.Add(lblMenu)
         Next
 
-        Dim lblAdmin As New Label()
-        lblAdmin.Text = "Admin"
-        lblAdmin.Font = New Font("Segoe UI", 10, FontStyle.Bold)
-        lblAdmin.ForeColor = modTheme.cWhite
-        lblAdmin.AutoSize = True
-        lblAdmin.Location = New Point(topBar.Width - 100, 22)
-        lblAdmin.Anchor = AnchorStyles.Top Or AnchorStyles.Right
-        topBar.Controls.Add(lblAdmin)
+        Dim lblUser As New Label()
+        lblUser.Text = "Admin"
+        lblUser.Font = New Font("Segoe UI", 10, FontStyle.Bold)
+        lblUser.ForeColor = modTheme.cWhite
+        lblUser.AutoSize = True
+        lblUser.Anchor = AnchorStyles.Top Or AnchorStyles.Right
+        lblUser.Location = New Point(topBar.Width - 100, 22)
+        topBar.Controls.Add(lblUser)
     End Sub
 
     Private Sub BuildContentArea()
-        Dim contentPanel As New Panel()
-        contentPanel.Name = "contentPanel"
+        contentPanel = New Panel()
         contentPanel.Dock = DockStyle.Fill
         contentPanel.BackColor = modTheme.cSurface
         contentPanel.Padding = New Padding(20)
         Me.Controls.Add(contentPanel)
+    End Sub
+
+    Private Sub LoadScreen(menuText As String)
+        contentPanel.Controls.Clear()
+        For Each lbl In menuLabels
+            lbl.Font = New Font("Segoe UI", 10, FontStyle.Regular)
+        Next
+        For Each lbl In menuLabels
+            If lbl.Text = menuText Then
+                lbl.Font = New Font("Segoe UI", 10, FontStyle.Bold)
+            End If
+        Next
+
+
+        Select Case menuText
+            Case "Dashboard"
+                LoadDashboard()
+            Case "Users"
+                Dim usersCtrl As New ucAdminUsers()
+                contentPanel.Controls.Add(usersCtrl)
+            Case "Reports"
+                Dim reportsCtrl As New ucAdminReports()
+                contentPanel.Controls.Add(reportsCtrl)
+            Case "Logs"
+                Dim logsCtrl As New ucAdminLogs()
+                contentPanel.Controls.Add(logsCtrl)
+            Case "Connected"
+                Dim connCtrl As New ucAdminConnected()
+                contentPanel.Controls.Add(connCtrl)
+            Case "Listings"
+                Dim listingsCtrl As New ucAdminListings()
+                contentPanel.Controls.Add(listingsCtrl)
+            Case "Settings"
+                Dim lblSettings As New Label()
+                lblSettings.Text = "Settings Screen Coming Soon"
+                lblSettings.Font = modTheme.fTitle
+                lblSettings.ForeColor = modTheme.cMuted
+                lblSettings.Location = New Point(20, 20)
+                lblSettings.AutoSize = True
+                contentPanel.Controls.Add(lblSettings)
+            Case "Console"
+                Dim consoleCtrl As New ucAdminConsole()
+                contentPanel.Controls.Add(consoleCtrl)
+            Case "Performance"
+                Dim perfCtrl As New ucAdminPerformance()
+                contentPanel.Controls.Add(perfCtrl)
+            Case Else
+                Dim lblPlaceholder As New Label()
+                lblPlaceholder.Text = menuText & " Screen Coming Soon"
+                lblPlaceholder.Font = modTheme.fTitle
+                lblPlaceholder.ForeColor = modTheme.cMuted
+                lblPlaceholder.Location = New Point(20, 20)
+                lblPlaceholder.AutoSize = True
+                contentPanel.Controls.Add(lblPlaceholder)
+        End Select
+    End Sub
+
+
+    Private Sub LoadDashboard()
+        contentPanel.Controls.Clear()
 
         Dim lblTitle As New Label()
         lblTitle.Text = "System Overview"
@@ -78,30 +142,78 @@ Public Class frmAdminDashboard
         lblTitle.AutoSize = True
         contentPanel.Controls.Add(lblTitle)
 
-        ' --- ADD 4 STAT CARDS ---
-        ' We position them side by side
-        contentPanel.Controls.Add(CreateStatCard("Traders", "128", 20, 80, modTheme.cOcean))
-        contentPanel.Controls.Add(CreateStatCard("Retailers & Wholesalers", "342", 270, 80, modTheme.cTeal))
-        contentPanel.Controls.Add(CreateStatCard("Active Listings", "516", 520, 80, modTheme.cSuccess))
-        contentPanel.Controls.Add(CreateStatCard("Orders Today", "47", 770, 80, modTheme.cWarning))
+        Try
+            Dim dt As DataTable = modDB.GetAdminStats()
+            If dt.Rows.Count > 0 Then
+                Dim row As DataRow = dt.Rows(0)
+                Dim statCards As New FlowLayoutPanel()
+                statCards.Location = New Point(20, 80)
+                statCards.Size = New Size(contentPanel.Width - 40, 120)
+                statCards.Anchor = AnchorStyles.Top Or AnchorStyles.Left Or AnchorStyles.Right
+                statCards.FlowDirection = FlowDirection.LeftToRight
+                statCards.WrapContents = False
+                contentPanel.Controls.Add(statCards)
+
+                statCards.Controls.Add(CreateStatCard("Traders", row("TotalTraders").ToString(), modTheme.cOcean))
+                statCards.Controls.Add(CreateStatCard("Retailers & Wholesalers", row("TotalBuyers").ToString(), modTheme.cTeal))
+                statCards.Controls.Add(CreateStatCard("Active Listings", row("ActiveListings").ToString(), modTheme.cSuccess))
+                statCards.Controls.Add(CreateStatCard("Orders Today", row("OrdersToday").ToString(), modTheme.cWarning))
+            End If
+
+            ' Pending traders list
+            Dim lblPending As New Label()
+            lblPending.Text = "Traders Waiting for Approval"
+            lblPending.Font = New Font("Segoe UI", 14, FontStyle.Bold)
+            lblPending.ForeColor = modTheme.cOcean
+            lblPending.Location = New Point(20, 220)
+            lblPending.AutoSize = True
+            contentPanel.Controls.Add(lblPending)
+
+            Dim lvPending As New ListView()
+            lvPending.View = View.Details
+            lvPending.FullRowSelect = True
+            lvPending.GridLines = False
+            lvPending.Font = New Font("Segoe UI", 10, FontStyle.Regular)
+            lvPending.Location = New Point(20, 260)
+            lvPending.Size = New Size(contentPanel.Width - 60, 200)
+            lvPending.Anchor = AnchorStyles.Top Or AnchorStyles.Left Or AnchorStyles.Right
+            lvPending.BackColor = modTheme.cWhite
+            lvPending.BorderStyle = BorderStyle.FixedSingle
+
+            lvPending.Columns.Add("Name", 180)
+            lvPending.Columns.Add("Email", 200)
+            lvPending.Columns.Add("Phone", 130)
+            lvPending.Columns.Add("Registered", 130)
+
+            Dim pendingDt As DataTable = modDB.GetPendingTraders()
+            For Each prow As DataRow In pendingDt.Rows
+                Dim lvi As New ListViewItem(prow("DisplayName").ToString())
+                lvi.SubItems.Add(prow("Email").ToString())
+                lvi.SubItems.Add(prow("Phone").ToString())
+                lvi.SubItems.Add(prow("CreatedAt").ToString())
+                lvi.Tag = prow("UserID")
+                lvPending.Items.Add(lvi)
+            Next
+
+            contentPanel.Controls.Add(lvPending)
+        Catch ex As Exception
+            MessageBox.Show("Error loading dashboard: " & ex.Message)
+        End Try
     End Sub
 
-    ' --- HELPER FUNCTION TO BUILD A SINGLE CARD ---
-    Private Function CreateStatCard(title As String, value As String, x As Integer, y As Integer, accentColor As Color) As Panel
+    Private Function CreateStatCard(title As String, value As String, accentColor As Color) As Panel
         Dim card As New Panel()
         card.BackColor = modTheme.cWhite
-        card.Size = New Size(230, 100)
-        card.Location = New Point(x, y)
+        card.Size = New Size(220, 100)
+        card.Margin = New Padding(8)
         card.BorderStyle = BorderStyle.FixedSingle
 
-        ' Colored accent block on the left
         Dim accent As New Panel()
         accent.BackColor = accentColor
         accent.Size = New Size(8, 100)
         accent.Dock = DockStyle.Left
         card.Controls.Add(accent)
 
-        ' The Big Number
         Dim lblValue As New Label()
         lblValue.Text = value
         lblValue.Font = New Font("Segoe UI", 24, FontStyle.Bold)
@@ -110,7 +222,6 @@ Public Class frmAdminDashboard
         lblValue.AutoSize = True
         card.Controls.Add(lblValue)
 
-        ' The Title
         Dim lblTitle As New Label()
         lblTitle.Text = title
         lblTitle.Font = modTheme.fBody

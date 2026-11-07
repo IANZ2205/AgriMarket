@@ -204,6 +204,21 @@ Public Module modDB
                     cmd.ExecuteNonQuery()
                 End Using
 
+                Dim sqlSessions As String = "
+                    CREATE TABLE IF NOT EXISTS Sessions (
+                        SessionID INTEGER PRIMARY KEY AUTOINCREMENT,
+                        UserID INTEGER NOT NULL,
+                        Token TEXT(40),
+                        IPAddress TEXT(45),
+                        LoginAt TEXT DEFAULT CURRENT_TIMESTAMP,
+                        LastActivityAt TEXT DEFAULT CURRENT_TIMESTAMP,
+                        LogoutAt TEXT,
+                        EndReason TEXT(15)
+                    );"
+                Using cmd As New SqliteCommand(sqlSessions, conn)
+                    cmd.ExecuteNonQuery()
+                End Using
+
                 SeedAdmin(conn)
                 Return True
             End Using
@@ -1207,6 +1222,369 @@ Public Module modDB
         Catch ex As Exception
             MessageBox.Show("Error cancelling order: " & ex.Message)
             Return "ERR|VALIDATION|Database error"
+        End Try
+    End Function
+
+
+    Public Function GetAdminStats() As DataTable
+        Dim dt As New DataTable()
+        Try
+            Using conn As New SqliteConnection(ConnString)
+                conn.Open()
+                Dim sql As String = "
+                    SELECT 
+                        (SELECT COUNT(*) FROM Users WHERE Role = 'Trader' AND Status = 'Active') AS TotalTraders,
+                        (SELECT COUNT(*) FROM Users WHERE Role IN ('Retailer', 'Wholesaler') AND Status = 'Active') AS TotalBuyers,
+                        (SELECT COUNT(*) FROM Items WHERE Status = 'Active') AS ActiveListings,
+                        (SELECT COUNT(*) FROM Orders WHERE DATE(CreatedAt) = DATE('now')) AS OrdersToday,
+                        (SELECT COUNT(*) FROM Users WHERE Role = 'Trader' AND Status = 'Pending') AS PendingTraders,
+                        (SELECT COUNT(*) FROM Batches WHERE Status = 'Active' AND ExpiryDate <= datetime('now')) AS ExpiredBatches"
+                Using cmd As New SqliteCommand(sql, conn)
+                    Using reader As SqliteDataReader = cmd.ExecuteReader()
+                        dt.Load(reader)
+                    End Using
+                End Using
+            End Using
+        Catch ex As Exception
+            MessageBox.Show("Error fetching admin stats: " & ex.Message)
+        End Try
+        Return dt
+    End Function
+
+    Public Function GetPendingTraders() As DataTable
+        Dim dt As New DataTable()
+        Try
+            Using conn As New SqliteConnection(ConnString)
+                conn.Open()
+                Dim sql As String = "SELECT UserID, DisplayName, Email, Phone, FirstName, LastName, CreatedAt FROM Users WHERE Role = 'Trader' AND Status = 'Pending' ORDER BY CreatedAt ASC"
+                Using cmd As New SqliteCommand(sql, conn)
+                    Using reader As SqliteDataReader = cmd.ExecuteReader()
+                        dt.Load(reader)
+                    End Using
+                End Using
+            End Using
+        Catch ex As Exception
+            MessageBox.Show("Error fetching pending traders: " & ex.Message)
+        End Try
+        Return dt
+    End Function
+
+    Public Function ApproveUser(userId As Integer, adminId As Integer) As Boolean
+        Try
+            Using conn As New SqliteConnection(ConnString)
+                conn.Open()
+                Dim sql As String = "UPDATE Users SET Status = 'Active', ApprovedBy = @aid, ApprovedAt = datetime('now') WHERE UserID = @uid AND Status = 'Pending'"
+                Using cmd As New SqliteCommand(sql, conn)
+                    cmd.Parameters.AddWithValue("@aid", adminId)
+                    cmd.Parameters.AddWithValue("@uid", userId)
+                    Return cmd.ExecuteNonQuery() > 0
+                End Using
+            End Using
+        Catch ex As Exception
+            MessageBox.Show("Error approving user: " & ex.Message)
+            Return False
+        End Try
+    End Function
+
+    Public Function RejectUser(userId As Integer) As Boolean
+        Try
+            Using conn As New SqliteConnection(ConnString)
+                conn.Open()
+                Dim sql As String = "UPDATE Users SET Status = 'Deactivated' WHERE UserID = @uid AND Status = 'Pending'"
+                Using cmd As New SqliteCommand(sql, conn)
+                    cmd.Parameters.AddWithValue("@uid", userId)
+                    Return cmd.ExecuteNonQuery() > 0
+                End Using
+            End Using
+        Catch ex As Exception
+            MessageBox.Show("Error rejecting user: " & ex.Message)
+            Return False
+        End Try
+    End Function
+
+
+    Public Function GetSalesReport(fromDate As String, toDate As String) As DataTable
+        Dim dt As New DataTable()
+        Try
+            Using conn As New SqliteConnection(ConnString)
+                conn.Open()
+                Dim sql As String = "
+                    SELECT 
+                        o.OrderNo,
+                        o.CreatedAt,
+                        u.DisplayName AS BuyerName,
+                        i.EnglishName AS ItemName,
+                        o.Qty,
+                        o.UnitPriceAtOrder,
+                        o.TotalAmount,
+                        o.Status
+                    FROM Orders o
+                    JOIN Items i ON o.ItemID = i.ItemID
+                    JOIN Users u ON o.BuyerID = u.UserID
+                    WHERE o.Status = 'Completed' 
+                      AND DATE(o.CreatedAt) BETWEEN @from AND @to
+                    ORDER BY o.CreatedAt DESC"
+                Using cmd As New SqliteCommand(sql, conn)
+                    cmd.Parameters.AddWithValue("@from", fromDate)
+                    cmd.Parameters.AddWithValue("@to", toDate)
+                    Using reader As SqliteDataReader = cmd.ExecuteReader()
+                        dt.Load(reader)
+                    End Using
+                End Using
+            End Using
+        Catch ex As Exception
+            MessageBox.Show("Error generating sales report: " & ex.Message)
+        End Try
+        Return dt
+    End Function
+
+    Public Function GetStockReport() As DataTable
+        Dim dt As New DataTable()
+        Try
+            Using conn As New SqliteConnection(ConnString)
+                conn.Open()
+                Dim sql As String = "
+                    SELECT 
+                        i.EnglishName,
+                        i.Category,
+                        i.Unit,
+                        u.DisplayName AS TraderName,
+                        IFNULL(SUM(CASE WHEN b.ExpiryDate > datetime('now') THEN (b.QtyRemaining - b.QtyReserved) ELSE 0 END), 0) AS AvailableQty,
+                        i.UnitPrice,
+                        COUNT(CASE WHEN b.ExpiryDate > datetime('now') THEN b.BatchID END) AS ActiveBatches
+                    FROM Items i
+                    JOIN Users u ON i.TraderID = u.UserID
+                    LEFT JOIN Batches b ON i.ItemID = b.ItemID AND b.Status = 'Active'
+                    WHERE i.Status = 'Active'
+                    GROUP BY i.ItemID, i.EnglishName, i.Category, i.Unit, u.DisplayName, i.UnitPrice
+                    ORDER BY i.EnglishName ASC"
+                Using cmd As New SqliteCommand(sql, conn)
+                    Using reader As SqliteDataReader = cmd.ExecuteReader()
+                        dt.Load(reader)
+                    End Using
+                End Using
+            End Using
+        Catch ex As Exception
+            MessageBox.Show("Error generating stock report: " & ex.Message)
+        End Try
+        Return dt
+    End Function
+
+    Public Function GetUsersReport() As DataTable
+        Dim dt As New DataTable()
+        Try
+            Using conn As New SqliteConnection(ConnString)
+                conn.Open()
+                Dim sql As String = "SELECT DisplayName, Email, Role, Status, Phone, CreatedAt FROM Users ORDER BY Role ASC, DisplayName ASC"
+                Using cmd As New SqliteCommand(sql, conn)
+                    Using reader As SqliteDataReader = cmd.ExecuteReader()
+                        dt.Load(reader)
+                    End Using
+                End Using
+            End Using
+        Catch ex As Exception
+            MessageBox.Show("Error generating users report: " & ex.Message)
+        End Try
+        Return dt
+    End Function
+
+
+    Public Function GetServerLogs(level As String, search As String) As DataTable
+        Dim dt As New DataTable()
+        Try
+            Using conn As New SqliteConnection(ConnString)
+                conn.Open()
+                Dim sql As String = "SELECT LoggedAt, Level, EventType, Details FROM ServerLog WHERE 1=1"
+                If Not String.IsNullOrEmpty(level) AndAlso level <> "All" Then
+                    sql &= " AND Level = @level"
+                End If
+                If Not String.IsNullOrEmpty(search) Then
+                    sql &= " AND (Details LIKE @search OR EventType LIKE @search)"
+                End If
+                sql &= " ORDER BY LoggedAt DESC LIMIT 100"
+
+                Using cmd As New SqliteCommand(sql, conn)
+                    If Not String.IsNullOrEmpty(level) AndAlso level <> "All" Then
+                        cmd.Parameters.AddWithValue("@level", level)
+                    End If
+                    If Not String.IsNullOrEmpty(search) Then
+                        cmd.Parameters.AddWithValue("@search", "%" & search & "%")
+                    End If
+                    Using reader As SqliteDataReader = cmd.ExecuteReader()
+                        dt.Load(reader)
+                    End Using
+                End Using
+            End Using
+        Catch ex As Exception
+            MessageBox.Show("Error fetching logs: " & ex.Message)
+        End Try
+        Return dt
+    End Function
+
+    Public Function GetConnectedUsers() As DataTable
+        Dim dt As New DataTable()
+        Try
+            Using conn As New SqliteConnection(ConnString)
+                conn.Open()
+                ' For now, we'll just return all active users who have logged in recently
+                Dim sql As String = "SELECT DisplayName, Role, Email, LastLoginAt FROM Users WHERE Status = 'Active' AND LastLoginAt IS NOT NULL ORDER BY LastLoginAt DESC"
+                Using cmd As New SqliteCommand(sql, conn)
+                    Using reader As SqliteDataReader = cmd.ExecuteReader()
+                        dt.Load(reader)
+                    End Using
+                End Using
+            End Using
+        Catch ex As Exception
+            MessageBox.Show("Error fetching connected users: " & ex.Message)
+        End Try
+        Return dt
+    End Function
+
+    Public Sub CreateSession(userId As Integer, token As String, ip As String)
+        Try
+            Using conn As New SqliteConnection(ConnString)
+                conn.Open()
+                Dim sql As String = "INSERT INTO Sessions (UserID, Token, IPAddress) VALUES (@uid, @token, @ip)"
+                Using cmd As New SqliteCommand(sql, conn)
+                    cmd.Parameters.AddWithValue("@uid", userId)
+                    cmd.Parameters.AddWithValue("@token", token)
+                    cmd.Parameters.AddWithValue("@ip", ip)
+                    cmd.ExecuteNonQuery()
+                End Using
+            End Using
+        Catch ex As Exception
+        End Try
+    End Sub
+
+    Public Sub CloseSession(token As String, reason As String)
+        Try
+            Using conn As New SqliteConnection(ConnString)
+                conn.Open()
+                Dim sql As String = "UPDATE Sessions SET LogoutAt = datetime('now'), EndReason = @reason WHERE Token = @token AND LogoutAt IS NULL"
+                Using cmd As New SqliteCommand(sql, conn)
+                    cmd.Parameters.AddWithValue("@reason", reason)
+                    cmd.Parameters.AddWithValue("@token", token)
+                    cmd.ExecuteNonQuery()
+                End Using
+            End Using
+        Catch ex As Exception
+        End Try
+    End Sub
+
+    Public Function GetActiveSessions() As DataTable
+        Dim dt As New DataTable()
+        Try
+            Using conn As New SqliteConnection(ConnString)
+                conn.Open()
+                Dim sql As String = "
+                    SELECT u.DisplayName, u.Role, u.Email, s.LoginAt, s.IPAddress 
+                    FROM Sessions s
+                    JOIN Users u ON s.UserID = u.UserID
+                    WHERE s.LogoutAt IS NULL"
+                Using cmd As New SqliteCommand(sql, conn)
+                    Using reader As SqliteDataReader = cmd.ExecuteReader()
+                        dt.Load(reader)
+                    End Using
+                End Using
+            End Using
+        Catch ex As Exception
+        End Try
+        Return dt
+    End Function
+
+    Public Sub WriteLog(level As String, eventType As String, details As String, Optional userId As Integer = 0)
+        Try
+            Using conn As New SqliteConnection(ConnString)
+                conn.Open()
+                Dim sql As String = "INSERT INTO ServerLog (LoggedAt, Level, UserID, EventType, Details) VALUES (datetime('now'), @lvl, @uid, @etype, @det)"
+                Using cmd As New SqliteCommand(sql, conn)
+                    cmd.Parameters.AddWithValue("@lvl", level)
+                    cmd.Parameters.AddWithValue("@uid", If(userId = 0, DBNull.Value, userId))
+                    cmd.Parameters.AddWithValue("@etype", eventType)
+                    cmd.Parameters.AddWithValue("@det", details)
+                    cmd.ExecuteNonQuery()
+                End Using
+            End Using
+        Catch ex As Exception
+        End Try
+    End Sub
+
+    Public Function GetSettings() As DataTable
+        Dim dt As New DataTable()
+        Try
+            Using conn As New SqliteConnection(ConnString)
+                conn.Open()
+                Dim createSql As String = "CREATE TABLE IF NOT EXISTS Settings (SettingKey TEXT(40) PRIMARY KEY, SettingValue TEXT(100), Description TEXT(120));"
+                Using cmd As New SqliteCommand(createSql, conn)
+                    cmd.ExecuteNonQuery()
+                End Using
+                Dim checkSql As String = "SELECT COUNT(*) FROM Settings"
+                Using cmd As New SqliteCommand(checkSql, conn)
+                    If Convert.ToInt32(cmd.ExecuteScalar()) = 0 Then
+                        Dim seedSql As String = "INSERT INTO Settings (SettingKey, SettingValue, Description) VALUES ('ExpirySoonDays', '2', 'Days before expiry to show warning'), ('ExpirySoonPercent', '25', 'Percentage of shelf life'), ('DefaultLowStock', '10', 'Default low stock threshold'), ('SessionTimeoutSeconds', '120', 'Seconds of inactivity'), ('MaxFailedLogins', '5', 'Max failed login attempts'), ('LockMinutes', '5', 'Lockout minutes'), ('LogRetentionDays', '30', 'Days to keep logs'), ('MaxFileMB', '5', 'Max upload size'), ('ServerPort', '5000', 'Server port');"
+                        Using cmdSeed As New SqliteCommand(seedSql, conn)
+                            cmdSeed.ExecuteNonQuery()
+                        End Using
+                    End If
+                End Using
+                Dim sql As String = "SELECT SettingKey, SettingValue, Description FROM Settings ORDER BY SettingKey"
+                Using cmd As New SqliteCommand(sql, conn)
+                    Using reader As SqliteDataReader = cmd.ExecuteReader()
+                        dt.Load(reader)
+                    End Using
+                End Using
+            End Using
+        Catch ex As Exception
+        End Try
+        Return dt
+    End Function
+
+    Public Function UpdateSetting(key As String, value As String) As Boolean
+        Try
+            Using conn As New SqliteConnection(ConnString)
+                conn.Open()
+                Dim sql As String = "UPDATE Settings SET SettingValue = @val WHERE SettingKey = @key"
+                Using cmd As New SqliteCommand(sql, conn)
+                    cmd.Parameters.AddWithValue("@val", value)
+                    cmd.Parameters.AddWithValue("@key", key)
+                    Return cmd.ExecuteNonQuery() > 0
+                End Using
+            End Using
+        Catch ex As Exception
+            Return False
+        End Try
+    End Function
+
+    Public Function GetAllListings() As DataTable
+        Dim dt As New DataTable()
+        Try
+            Using conn As New SqliteConnection(ConnString)
+                conn.Open()
+                Dim sql As String = "SELECT i.ItemID, i.EnglishName, i.Category, i.Unit, i.UnitPrice, u.DisplayName AS TraderName, i.Status, IFNULL(SUM(CASE WHEN b.ExpiryDate > datetime('now') THEN (b.QtyRemaining - b.QtyReserved) ELSE 0 END), 0) AS AvailableQty FROM Items i JOIN Users u ON i.TraderID = u.UserID LEFT JOIN Batches b ON i.ItemID = b.ItemID AND b.Status = 'Active' GROUP BY i.ItemID, i.EnglishName, i.Category, i.Unit, i.UnitPrice, u.DisplayName, i.Status ORDER BY i.EnglishName ASC"
+                Using cmd As New SqliteCommand(sql, conn)
+                    Using reader As SqliteDataReader = cmd.ExecuteReader()
+                        dt.Load(reader)
+                    End Using
+                End Using
+            End Using
+        Catch ex As Exception
+        End Try
+        Return dt
+    End Function
+
+    Public Function UpdateListingStatus(itemId As Integer, newStatus As String) As Boolean
+        Try
+            Using conn As New SqliteConnection(ConnString)
+                conn.Open()
+                Dim sql As String = "UPDATE Items SET Status = @status WHERE ItemID = @id"
+                Using cmd As New SqliteCommand(sql, conn)
+                    cmd.Parameters.AddWithValue("@status", newStatus)
+                    cmd.Parameters.AddWithValue("@id", itemId)
+                    Return cmd.ExecuteNonQuery() > 0
+                End Using
+            End Using
+        Catch ex As Exception
+            Return False
         End Try
     End Function
 

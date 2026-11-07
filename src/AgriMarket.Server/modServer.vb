@@ -70,6 +70,8 @@ Public Module modServer
                             Dim role As String = userInfo.Rows(0)("Role").ToString()
                             Dim name As String = userInfo.Rows(0)("DisplayName").ToString()
                             Dim token As String = Guid.NewGuid().ToString()
+                            modDB.CreateSession(Integer.Parse(userId), token, "127.0.0.1")
+                            modDB.WriteLog("Info", "Login", "User logged in: " & email, Integer.Parse(userId))
                             reply = $"OK|{reqId}|{role}|{name}|{token}|{userId}" & vbCrLf
                         Else
                             reply = $"ERR|{reqId}|BAD_CREDENTIALS|Invalid email or password" & vbCrLf
@@ -515,7 +517,9 @@ Public Module modServer
 
 
                     ElseIf parts(0) = "LOGOUT" Then
-                        ' Client will close the socket
+                        Dim token As String = parts(1)
+                        modDB.CloseSession(token, "Logout")
+                        modDB.WriteLog("Info", "Logout", "User logged out")
                     End If
                 End While
             End While
@@ -525,4 +529,5 @@ Public Module modServer
             client.Close()
         End Try
     End Sub
+
 End Module
