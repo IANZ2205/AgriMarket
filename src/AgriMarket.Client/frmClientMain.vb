@@ -1,4 +1,5 @@
-﻿Imports System.Text
+﻿Imports System.Runtime
+Imports System.Text
 Imports AgriMarket.Shared
 Imports AgriMarket.[Shared].AgriMarket.[Shared]
 
@@ -62,7 +63,10 @@ Public Class frmClientMain
         topBar.Controls.Add(pnlUser)
 
         Dim lblUser As New Label()
-        lblUser.Text = UserName & " (" & UserRole & ")"
+        'lblUser.Text = UserName & " (" & UserRole & ") Profile ▼"
+        lblUser.Text = "Profile ▼"
+        lblUser.Cursor = Cursors.Hand
+        AddHandler lblUser.Click, Sub(s, ev) OpenProfile()
         lblUser.Font = New Font("Segoe UI", 10, FontStyle.Bold)
         lblUser.ForeColor = modTheme.cWhite
         lblUser.AutoSize = True
@@ -100,7 +104,6 @@ Public Class frmClientMain
         End If
         menus.Add("Chats")
         menus.Add("Notifications")
-        menus.Add("Profile")
 
         For Each menuText In menus
             Dim lblMenu As New Label()
@@ -139,13 +142,13 @@ Public Class frmClientMain
         Select Case menuText
             Case "Home"
                 If UserRole = "Trader" Then
-                    Dim lblTitle As New Label()
-                    lblTitle.Text = "Welcome, " & UserName
-                    lblTitle.Font = modTheme.fTitle
-                    lblTitle.ForeColor = modTheme.cOcean
-                    lblTitle.Location = New Point(20, 20)
-                    lblTitle.AutoSize = True
-                    contentPanel.Controls.Add(lblTitle)
+                    Dim home As New ucTraderHome()
+                    home.Token = Token
+                    home.TraderID = UserID
+                    home.TraderName = UserName
+                    home.TraderPhone = "0700 000 000" ' We'll fetch this later, for now default
+                    home.TraderLocation = "Kampala"
+                    contentPanel.Controls.Add(home)
                 Else
                     Dim browse As New ucBrowse()
                     browse.Token = Token
@@ -234,5 +237,13 @@ Public Class frmClientMain
         frmConnect.DisposeConnection()
     End Sub
 
+    Private Sub OpenProfile()
+        Dim frm As New frmProfile()
+        frm.Token = Token
+        frm.UserID = UserID
+        If frm.ShowDialog() = DialogResult.OK Then
+            ' Optionally, refresh the main dashboard if needed
+        End If
+    End Sub
 
 End Class

@@ -1509,52 +1509,6 @@ Public Module modDB
         End Try
     End Sub
 
-    Public Function GetSettings() As DataTable
-        Dim dt As New DataTable()
-        Try
-            Using conn As New SqliteConnection(ConnString)
-                conn.Open()
-                Dim createSql As String = "CREATE TABLE IF NOT EXISTS Settings (SettingKey TEXT(40) PRIMARY KEY, SettingValue TEXT(100), Description TEXT(120));"
-                Using cmd As New SqliteCommand(createSql, conn)
-                    cmd.ExecuteNonQuery()
-                End Using
-                Dim checkSql As String = "SELECT COUNT(*) FROM Settings"
-                Using cmd As New SqliteCommand(checkSql, conn)
-                    If Convert.ToInt32(cmd.ExecuteScalar()) = 0 Then
-                        Dim seedSql As String = "INSERT INTO Settings (SettingKey, SettingValue, Description) VALUES ('ExpirySoonDays', '2', 'Days before expiry to show warning'), ('ExpirySoonPercent', '25', 'Percentage of shelf life'), ('DefaultLowStock', '10', 'Default low stock threshold'), ('SessionTimeoutSeconds', '120', 'Seconds of inactivity'), ('MaxFailedLogins', '5', 'Max failed login attempts'), ('LockMinutes', '5', 'Lockout minutes'), ('LogRetentionDays', '30', 'Days to keep logs'), ('MaxFileMB', '5', 'Max upload size'), ('ServerPort', '5000', 'Server port');"
-                        Using cmdSeed As New SqliteCommand(seedSql, conn)
-                            cmdSeed.ExecuteNonQuery()
-                        End Using
-                    End If
-                End Using
-                Dim sql As String = "SELECT SettingKey, SettingValue, Description FROM Settings ORDER BY SettingKey"
-                Using cmd As New SqliteCommand(sql, conn)
-                    Using reader As SqliteDataReader = cmd.ExecuteReader()
-                        dt.Load(reader)
-                    End Using
-                End Using
-            End Using
-        Catch ex As Exception
-        End Try
-        Return dt
-    End Function
-
-    Public Function UpdateSetting(key As String, value As String) As Boolean
-        Try
-            Using conn As New SqliteConnection(ConnString)
-                conn.Open()
-                Dim sql As String = "UPDATE Settings SET SettingValue = @val WHERE SettingKey = @key"
-                Using cmd As New SqliteCommand(sql, conn)
-                    cmd.Parameters.AddWithValue("@val", value)
-                    cmd.Parameters.AddWithValue("@key", key)
-                    Return cmd.ExecuteNonQuery() > 0
-                End Using
-            End Using
-        Catch ex As Exception
-            Return False
-        End Try
-    End Function
-
     Public Function GetAllListings() As DataTable
         Dim dt As New DataTable()
         Try
@@ -1580,6 +1534,222 @@ Public Module modDB
                 Using cmd As New SqliteCommand(sql, conn)
                     cmd.Parameters.AddWithValue("@status", newStatus)
                     cmd.Parameters.AddWithValue("@id", itemId)
+                    Return cmd.ExecuteNonQuery() > 0
+                End Using
+            End Using
+        Catch ex As Exception
+            Return False
+        End Try
+    End Function
+
+    Public Function UpdateUserProfile(userId As Integer, phone As String, location As String, profilePic As String) As Boolean
+        Try
+            Using conn As New SqliteConnection(ConnString)
+                conn.Open()
+                Dim sql As String = "UPDATE Users SET Phone = @phone, LocationDetail = @loc, ProfilePic = @pic WHERE UserID = @id"
+                Using cmd As New SqliteCommand(sql, conn)
+                    cmd.Parameters.AddWithValue("@phone", phone)
+                    cmd.Parameters.AddWithValue("@loc", location)
+                    cmd.Parameters.AddWithValue("@pic", If(String.IsNullOrEmpty(profilePic), DBNull.Value, profilePic))
+                    cmd.Parameters.AddWithValue("@id", userId)
+                    Return cmd.ExecuteNonQuery() > 0
+                End Using
+            End Using
+        Catch ex As Exception
+            Return False
+        End Try
+    End Function
+
+    Public Function GetUserProfile(userId As Integer) As DataTable
+        Dim dt As New DataTable()
+        Try
+            Using conn As New SqliteConnection(ConnString)
+                conn.Open()
+                Dim sql As String = "SELECT DisplayName, Role, Phone, LocationDetail, ProfilePic FROM Users WHERE UserID = @id"
+                Using cmd As New SqliteCommand(sql, conn)
+                    cmd.Parameters.AddWithValue("@id", userId)
+                    Using reader As SqliteDataReader = cmd.ExecuteReader()
+                        dt.Load(reader)
+                    End Using
+                End Using
+            End Using
+        Catch ex As Exception
+        End Try
+        Return dt
+    End Function
+
+    Public Sub RunExpiryCheck()
+        Try
+            Using conn As New SqliteConnection(ConnString)
+                conn.Open()
+
+                ' 1. Mark expired batches
+                Dim sqlExpire As String = "
+                    UPDATE Batches 
+                    SET Status = 'Expired' 
+                    WHERE Status = 'Active' 
+                      AND ExpiryDate <= datetime('now')"
+                Using cmd As New SqliteCommand(sqlExpire, conn)
+                    cmd.ExecuteNonQuery()
+                End Using
+
+                ' 2. Find batches expiring soon (within 2 days) that haven't been notified yet
+                Dim sqlSoon As String = "
+                    SELECT b.BatchID, b.ItemID, i.EnglishName, i.TraderID, b.ExpiryDate
+                    FROM Batches b
+                    JOIN Items i ON b.ItemID = i.ItemID
+                    WHERE b.Status = 'Active' 
+                      AND b.ExpiryDate > datetime('now') 
+                      AND b.ExpiryDate <= datetime('now', '+2 days')"
+
+                Using cmd As New SqliteCommand(sqlSoon, conn)
+                    Using reader As SqliteDataReader = cmd.ExecuteReader()
+                        While reader.Read()
+                            Dim traderId As Integer = Convert.ToInt32(reader("TraderID"))
+                            Dim itemName As String = reader("EnglishName").ToString()
+
+                            ' Create notification for the trader
+                            Dim notifSql As String = "
+                                INSERT INTO Notifications (UserID, NotifType, Title, Body, RelatedType, RelatedID, CreatedAt) 
+                                VALUES (@uid, 'EXPIRY_WARNING', 'Batch Expiring Soon', @body, 'Batch', @bid, datetime('now'))"
+
+                            Using notifCmd As New SqliteCommand(notifSql, conn)
+                                notifCmd.Parameters.AddWithValue("@uid", traderId)
+                                notifCmd.Parameters.AddWithValue("@body", $"Your batch of {itemName} is expiring soon.")
+                                notifCmd.Parameters.AddWithValue("@bid", reader("BatchID"))
+                                notifCmd.ExecuteNonQuery()
+                            End Using
+                        End While
+                    End Using
+                End Using
+            End Using
+        Catch ex As Exception
+            MessageBox.Show("Error running expiry check: " & ex.Message)
+        End Try
+    End Sub
+
+    Public Function GetTraderHomeStats(traderId As Integer) As DataTable
+        Dim dt As New DataTable()
+        Try
+            Using conn As New SqliteConnection(ConnString)
+                conn.Open()
+                Dim sql As String = "
+                    SELECT 
+                        (SELECT COUNT(*) FROM Items WHERE TraderID = @tid AND Status = 'Active') AS ItemsInStock,
+                        (SELECT COUNT(*) FROM Orders WHERE TraderID = @tid AND Status = 'Pending') AS PendingOrders,
+                        (SELECT COUNT(*) FROM Orders WHERE TraderID = @tid AND Status = 'Completed') AS CompletedOrders,
+                        (SELECT IFNULL(SUM(TotalAmount), 0) FROM Orders WHERE TraderID = @tid AND Status = 'Completed' AND CreatedAt >= datetime('now', 'start of month')) AS SalesThisMonth"
+                Using cmd As New SqliteCommand(sql, conn)
+                    cmd.Parameters.AddWithValue("@tid", traderId)
+                    Using reader As SqliteDataReader = cmd.ExecuteReader()
+                        dt.Load(reader)
+                    End Using
+                End Using
+            End Using
+        Catch ex As Exception
+            MessageBox.Show("Error fetching trader stats: " & ex.Message)
+        End Try
+        Return dt
+    End Function
+
+    Public Function GetBatchesToWatch(traderId As Integer) As DataTable
+        Dim dt As New DataTable()
+        Try
+            Using conn As New SqliteConnection(ConnString)
+                conn.Open()
+                Dim sql As String = "
+                    SELECT b.BatchNo, i.EnglishName, b.ExpiryDate, 
+                           CAST(julianday(b.ExpiryDate) - julianday('now') AS INTEGER) AS DaysLeft
+                    FROM Batches b
+                    JOIN Items i ON b.ItemID = i.ItemID
+                    WHERE i.TraderID = @tid 
+                      AND b.Status = 'Active'
+                      AND (b.ExpiryDate <= datetime('now', '+3 days') OR (b.QtyRemaining - b.QtyReserved) <= i.LowStockLevel)
+                    ORDER BY b.ExpiryDate ASC
+                    LIMIT 5"
+                Using cmd As New SqliteCommand(sql, conn)
+                    cmd.Parameters.AddWithValue("@tid", traderId)
+                    Using reader As SqliteDataReader = cmd.ExecuteReader()
+                        dt.Load(reader)
+                    End Using
+                End Using
+            End Using
+        Catch ex As Exception
+        End Try
+        Return dt
+    End Function
+
+    Public Function GetAllOrders() As DataTable
+        Dim dt As New DataTable()
+        Try
+            Using conn As New SqliteConnection(ConnString)
+                conn.Open()
+                Dim sql As String = "
+                    SELECT o.OrderNo, o.CreatedAt, o.Status, o.TotalAmount, 
+                           i.EnglishName AS ItemName, 
+                           uBuyer.DisplayName AS BuyerName, 
+                           uTrader.DisplayName AS TraderName
+                    FROM Orders o
+                    JOIN Items i ON o.ItemID = i.ItemID
+                    JOIN Users uBuyer ON o.BuyerID = uBuyer.UserID
+                    JOIN Users uTrader ON o.TraderID = uTrader.UserID
+                    ORDER BY o.CreatedAt DESC"
+                Using cmd As New SqliteCommand(sql, conn)
+                    Using reader As SqliteDataReader = cmd.ExecuteReader()
+                        dt.Load(reader)
+                    End Using
+                End Using
+            End Using
+        Catch ex As Exception
+            MessageBox.Show("Error fetching orders: " & ex.Message)
+        End Try
+        Return dt
+    End Function
+
+    Public Function GetSettings() As DataTable
+        Dim dt As New DataTable()
+        Try
+            Using conn As New SqliteConnection(ConnString)
+                conn.Open()
+                Dim createSql As String = "CREATE TABLE IF NOT EXISTS Settings (SettingKey TEXT(40) PRIMARY KEY, SettingValue TEXT(100), Description TEXT(120));"
+                Using cmd As New SqliteCommand(createSql, conn)
+                    cmd.ExecuteNonQuery()
+                End Using
+                Dim countSql As String = "SELECT COUNT(*) FROM Settings"
+                Using cmd As New SqliteCommand(countSql, conn)
+                    If Convert.ToInt32(cmd.ExecuteScalar()) = 0 Then
+                        Dim seedSql As String = "
+                            INSERT INTO Settings (SettingKey, SettingValue, Description) VALUES 
+                            ('ExpirySoonDays', '2', 'Days before expiry to show warning'),
+                            ('DefaultLowStock', '10', 'Default low stock threshold'),
+                            ('SessionTimeoutSeconds', '120', 'Seconds of inactivity before timeout'),
+                            ('MaxFailedLogins', '5', 'Max failed login attempts'),
+                            ('ServerPort', '5000', 'Server port');"
+                        Using cmdSeed As New SqliteCommand(seedSql, conn)
+                            cmdSeed.ExecuteNonQuery()
+                        End Using
+                    End If
+                End Using
+                Dim sql As String = "SELECT SettingKey, SettingValue, Description FROM Settings ORDER BY SettingKey"
+                Using cmd As New SqliteCommand(sql, conn)
+                    Using reader As SqliteDataReader = cmd.ExecuteReader()
+                        dt.Load(reader)
+                    End Using
+                End Using
+            End Using
+        Catch ex As Exception
+        End Try
+        Return dt
+    End Function
+
+    Public Function UpdateSetting(key As String, value As String) As Boolean
+        Try
+            Using conn As New SqliteConnection(ConnString)
+                conn.Open()
+                Dim sql As String = "UPDATE Settings SET SettingValue = @val WHERE SettingKey = @key"
+                Using cmd As New SqliteCommand(sql, conn)
+                    cmd.Parameters.AddWithValue("@val", value)
+                    cmd.Parameters.AddWithValue("@key", key)
                     Return cmd.ExecuteNonQuery() > 0
                 End Using
             End Using

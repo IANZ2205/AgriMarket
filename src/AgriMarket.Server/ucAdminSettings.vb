@@ -1,7 +1,4 @@
-﻿Imports System
-Imports System.Windows.Forms
-Imports System.Drawing
-Imports AgriMarket.Shared
+﻿Imports AgriMarket.Shared
 
 Public Class ucAdminSettings
     Private dgvSettings As New DataGridView()

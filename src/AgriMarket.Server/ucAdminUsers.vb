@@ -134,6 +134,8 @@ Public Class ucAdminUsers
         End If
     End Sub
 
+
+
     Private Sub btnReject_Click(sender As Object, e As EventArgs)
         If lvUsers.SelectedItems.Count = 0 Then Return
         Dim userId As Integer = Integer.Parse(lvUsers.SelectedItems(0).Tag.ToString())

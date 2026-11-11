@@ -515,6 +515,104 @@ Public Module modServer
                             stream.Write(replyBytes, 0, replyBytes.Length)
                         End If
 
+                    ElseIf parts(0) = "FILE_UPLOAD" Then
+                        Dim reqId As String = parts(1)
+                        Dim base64Data As String = parts(2)
+                        Dim originalName As String = parts(3)
+
+                        Dim cleanName As String = System.IO.Path.GetFileName(originalName)
+                        Dim uniqueName As String = Guid.NewGuid().ToString() & "_" & cleanName
+                        Dim savePath As String = System.IO.Path.Combine(Application.StartupPath, "Files", "profiles", uniqueName)
+
+                        System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(savePath))
+
+                        Try
+                            Dim fileBytes As Byte() = Convert.FromBase64String(base64Data)
+                            System.IO.File.WriteAllBytes(savePath, fileBytes)
+
+                            Dim reply As String = $"OK|{reqId}|{uniqueName}" & vbCrLf
+                            Dim replyBytes As Byte() = Encoding.UTF8.GetBytes(reply)
+                            stream.Write(replyBytes, 0, replyBytes.Length)
+                        Catch ex As Exception
+                            Dim reply As String = $"ERR|{reqId}|UPLOAD_FAILED|{ex.Message}" & vbCrLf
+                            Dim replyBytes As Byte() = Encoding.UTF8.GetBytes(reply)
+                            stream.Write(replyBytes, 0, replyBytes.Length)
+                        End Try
+
+                    ElseIf parts(0) = "UPDATE_PROFILE" Then
+                        Dim reqId As String = parts(1)
+                        Dim userId As Integer = Integer.Parse(parts(2))
+                        Dim phone As String = parts(3)
+                        Dim location As String = parts(4)
+                        Dim picName As String = parts(5)
+
+                        If modDB.UpdateUserProfile(userId, phone, location, picName) Then
+                            Dim reply As String = $"OK|{reqId}|Updated" & vbCrLf
+                            Dim replyBytes As Byte() = Encoding.UTF8.GetBytes(reply)
+                            stream.Write(replyBytes, 0, replyBytes.Length)
+                        Else
+                            Dim reply As String = $"ERR|{reqId}|VALIDATION|Update failed" & vbCrLf
+                            Dim replyBytes As Byte() = Encoding.UTF8.GetBytes(reply)
+                            stream.Write(replyBytes, 0, replyBytes.Length)
+                        End If
+
+                    ElseIf parts(0) = "GET_PROFILE" Then
+                        Dim reqId As String = parts(1)
+                        Dim userId As Integer = Integer.Parse(parts(3))
+                        Dim dt As DataTable = modDB.GetUserProfile(userId)
+                        Dim reply As String
+                        If dt.Rows.Count > 0 Then
+                            Dim row As DataRow = dt.Rows(0)
+                            Dim pic As String = If(IsDBNull(row("ProfilePic")), "", row("ProfilePic").ToString())
+
+                            ' Ensure we always send 7 parts: OK|ReqID|Name|Role|Phone|Location|Pic
+                            reply = $"OK|{reqId}|{row("DisplayName")}|{row("Role")}|{row("Phone")}|{row("LocationDetail")}|{pic}" & vbCrLf
+                        Else
+                            reply = $"ERR|{reqId}|NOT_FOUND|User not found" & vbCrLf
+                        End If
+                        Dim replyBytes As Byte() = Encoding.UTF8.GetBytes(reply)
+                        stream.Write(replyBytes, 0, replyBytes.Length)
+
+                    ElseIf parts(0) = "FILE_GET" Then
+                        Dim reqId As String = parts(1)
+                        Dim fileName As String = parts(3)
+                        Dim filePath As String = System.IO.Path.Combine(Application.StartupPath, "Files", "profiles", fileName)
+                        If System.IO.File.Exists(filePath) Then
+                            Dim fileBytes As Byte() = System.IO.File.ReadAllBytes(filePath)
+                            Dim base64 As String = Convert.ToBase64String(fileBytes)
+                            Dim reply As String = $"OK|{reqId}|{base64}" & vbCrLf
+                            Dim replyBytes As Byte() = Encoding.UTF8.GetBytes(reply)
+                            stream.Write(replyBytes, 0, replyBytes.Length)
+                        Else
+                            Dim reply As String = $"ERR|{reqId}|NOT_FOUND|File not found" & vbCrLf
+                            Dim replyBytes As Byte() = Encoding.UTF8.GetBytes(reply)
+                            stream.Write(replyBytes, 0, replyBytes.Length)
+                        End If
+
+                    ElseIf parts(0) = "TRADER_HOME" Then
+                        Dim reqId As String = parts(1)
+                        Dim traderId As Integer = Integer.Parse(parts(3))
+
+                        Dim stats As DataTable = modDB.GetTraderHomeStats(traderId)
+                        Dim batches As DataTable = modDB.GetBatchesToWatch(traderId)
+
+                        Dim sbReply As New StringBuilder()
+                        sbReply.AppendLine($"OK|{reqId}")
+
+                        ' Stats record
+                        If stats.Rows.Count > 0 Then
+                            Dim row As DataRow = stats.Rows(0)
+                            sbReply.AppendLine("STATS|" & row("ItemsInStock").ToString() & "|" & row("PendingOrders").ToString() & "|" & row("CompletedOrders").ToString() & "|" & Convert.ToDecimal(row("SalesThisMonth")).ToString("F0"))
+                        End If
+
+                        ' Batches record
+                        For Each row As DataRow In batches.Rows
+                            sbReply.AppendLine("WATCH|" & row("EnglishName").ToString() & "|" & row("BatchNo").ToString() & "|" & row("DaysLeft").ToString())
+                        Next
+
+                        sbReply.AppendLine("END")
+                        Dim replyBytes As Byte() = Encoding.UTF8.GetBytes(sbReply.ToString())
+                        stream.Write(replyBytes, 0, replyBytes.Length)
 
                     ElseIf parts(0) = "LOGOUT" Then
                         Dim token As String = parts(1)

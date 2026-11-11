@@ -86,48 +86,45 @@ Public Class frmAdminDashboard
             End If
         Next
 
-
         Select Case menuText
-            Case "Dashboard"
-                LoadDashboard()
-            Case "Users"
-                Dim usersCtrl As New ucAdminUsers()
-                contentPanel.Controls.Add(usersCtrl)
-            Case "Reports"
-                Dim reportsCtrl As New ucAdminReports()
-                contentPanel.Controls.Add(reportsCtrl)
-            Case "Logs"
-                Dim logsCtrl As New ucAdminLogs()
-                contentPanel.Controls.Add(logsCtrl)
-            Case "Connected"
-                Dim connCtrl As New ucAdminConnected()
-                contentPanel.Controls.Add(connCtrl)
-            Case "Listings"
-                Dim listingsCtrl As New ucAdminListings()
-                contentPanel.Controls.Add(listingsCtrl)
-            Case "Settings"
-                Dim lblSettings As New Label()
-                lblSettings.Text = "Settings Screen Coming Soon"
-                lblSettings.Font = modTheme.fTitle
-                lblSettings.ForeColor = modTheme.cMuted
-                lblSettings.Location = New Point(20, 20)
-                lblSettings.AutoSize = True
-                contentPanel.Controls.Add(lblSettings)
-            Case "Console"
-                Dim consoleCtrl As New ucAdminConsole()
-                contentPanel.Controls.Add(consoleCtrl)
-            Case "Performance"
-                Dim perfCtrl As New ucAdminPerformance()
-                contentPanel.Controls.Add(perfCtrl)
-            Case Else
-                Dim lblPlaceholder As New Label()
-                lblPlaceholder.Text = menuText & " Screen Coming Soon"
-                lblPlaceholder.Font = modTheme.fTitle
-                lblPlaceholder.ForeColor = modTheme.cMuted
-                lblPlaceholder.Location = New Point(20, 20)
-                lblPlaceholder.AutoSize = True
-                contentPanel.Controls.Add(lblPlaceholder)
-        End Select
+                Case "Dashboard"
+                    LoadDashboard()
+                Case "Users"
+                    Dim usersCtrl As New ucAdminUsers()
+                    contentPanel.Controls.Add(usersCtrl)
+                Case "Listings"
+                    Dim listingsCtrl As New ucAdminListings()
+                    contentPanel.Controls.Add(listingsCtrl)
+                Case "Orders"
+                    Dim ordersCtrl As New ucAdminOrders()
+                    contentPanel.Controls.Add(ordersCtrl)
+                Case "Reports"
+                    Dim reportsCtrl As New ucAdminReports()
+                    contentPanel.Controls.Add(reportsCtrl)
+                Case "Logs"
+                    Dim logsCtrl As New ucAdminLogs()
+                    contentPanel.Controls.Add(logsCtrl)
+                Case "Connected"
+                    Dim connCtrl As New ucAdminConnected()
+                    contentPanel.Controls.Add(connCtrl)
+                Case "Console"
+                    Dim consoleCtrl As New ucAdminConsole()
+                    contentPanel.Controls.Add(consoleCtrl)
+                Case "Performance"
+                    Dim perfCtrl As New ucAdminPerformance()
+                    contentPanel.Controls.Add(perfCtrl)
+                Case "Settings"
+                    Dim settingsCtrl As New ucAdminSettings()
+                    contentPanel.Controls.Add(settingsCtrl)
+                Case Else
+                    Dim lblPlaceholder As New Label()
+                    lblPlaceholder.Text = menuText & " Screen Coming Soon"
+                    lblPlaceholder.Font = modTheme.fTitle
+                    lblPlaceholder.ForeColor = modTheme.cMuted
+                    lblPlaceholder.Location = New Point(20, 20)
+                    lblPlaceholder.AutoSize = True
+                    contentPanel.Controls.Add(lblPlaceholder)
+            End Select
     End Sub
 
 

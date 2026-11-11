@@ -1,10 +1,10 @@
 ﻿Imports AgriMarket.Shared
-Imports AgriMarket.[Shared].AgriMarket.[Shared]
+Imports System.Windows.Forms
 
 Public Class frmServerLogin
-    ' --- We declare these at the top of the class so the button can see them ---
     Private txtEmail As New TextBox()
     Private txtPass As New TextBox()
+    Private expiryTimer As New Timer() ' <-- Moved INSIDE the class
 
     Private Sub frmServerLogin_Load(sender As Object, e As EventArgs) Handles MyBase.Load
         Me.Text = "AgriMarket Server"
@@ -15,17 +15,26 @@ Public Class frmServerLogin
         Me.BackColor = modTheme.cWhite
         Me.Font = modTheme.fBody
 
-        ' ---> ADD THESE TWO LINES HERE <---
+        ' Start Database and Server
         modDB.InitializeDatabase()
         modServer.StartListening()
+
+        ' Start the Expiry Check timer
+        expiryTimer.Interval = 300000 ' 5 minutes
+        AddHandler expiryTimer.Tick, Sub(s, ev) modDB.RunExpiryCheck()
+        expiryTimer.Start()
+
+        ' Run an initial check right away
+        modDB.RunExpiryCheck()
 
         BuildLayout()
     End Sub
 
-    ' ---> ADD THIS TOO TO CLEAN UP WHEN CLOSING <---
     Private Sub frmServerLogin_FormClosing(sender As Object, e As FormClosingEventArgs) Handles MyBase.FormClosing
         modServer.StopListening()
+        expiryTimer.Stop()
     End Sub
+
     Private Sub BuildLayout()
         ' LEFT PANEL
         Dim pnlLeft As New Panel()
@@ -87,34 +96,29 @@ Public Class frmServerLogin
         lblSub.AutoSize = True
         Me.Controls.Add(lblSub)
 
-        ' Email Field
         Dim lblEmail As New Label()
         lblEmail.Text = "Admin Email"
         lblEmail.ForeColor = modTheme.cText
         lblEmail.Location = New Point(405, 180)
         Me.Controls.Add(lblEmail)
 
-        ' Note: We don't use "Dim" here because it's declared at the top
         txtEmail.Location = New Point(405, 200)
         txtEmail.Size = New Size(300, 25)
         txtEmail.Font = modTheme.fBody
         Me.Controls.Add(txtEmail)
 
-        ' Password Field
         Dim lblPass As New Label()
         lblPass.Text = "Password"
         lblPass.ForeColor = modTheme.cText
         lblPass.Location = New Point(405, 240)
         Me.Controls.Add(lblPass)
 
-        ' Note: We don't use "Dim" here either
         txtPass.Location = New Point(405, 260)
         txtPass.Size = New Size(300, 25)
         txtPass.UseSystemPasswordChar = True
         txtPass.Font = modTheme.fBody
         Me.Controls.Add(txtPass)
 
-        ' Login Button
         Dim btnLogin As New Button()
         btnLogin.Text = "Log In"
         btnLogin.BackColor = modTheme.cOcean
